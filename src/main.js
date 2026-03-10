@@ -39,6 +39,9 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');  // Enable WebGL on all GP
 app.commandLine.appendSwitch('disable-background-networking');
 app.commandLine.appendSwitch('disable-component-update');
 
+// Anti-bot detection: remove navigator.webdriver flag
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+
 // ==========================================
 // Single Instance & URL Handling (default browser support)
 // ==========================================
