@@ -1,9 +1,10 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
-const { autoUpdater } = require('electron-updater');
+const { execFile } = require('child_process');
+const pkg = require('../package.json');
 
 // Chromium performance flags (must be set before app.whenReady)
 app.commandLine.appendSwitch('enable-gpu-rasterization');
@@ -401,48 +402,175 @@ app.whenReady().then(async () => {
   createWindow();
 
   // ==========================================
-  // Auto-Update (electron-updater)
+  // Asar Hot-Update System
   // ==========================================
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.logger = console;
+  setTimeout(() => checkForAsarUpdate(), 3000);
+  ipcMain.handle('check-for-updates', () => checkForAsarUpdate());
 
-  autoUpdater.on('update-available', (info) => {
-    mainWindow?.webContents.send('update-status', {
-      status: 'downloading',
-      version: info.version,
-    });
-  });
+// ==========================================
+// Asar Hot-Update Functions
+// ==========================================
 
-  autoUpdater.on('download-progress', (progress) => {
-    mainWindow?.webContents.send('update-status', {
-      status: 'progress',
-      percent: Math.round(progress.percent),
-    });
-  });
+function isNewerVersion(latest, current) {
+  const l = latest.split('.').map(Number);
+  const c = current.split('.').map(Number);
+  for (let i = 0; i < Math.max(l.length, c.length); i++) {
+    if ((l[i] || 0) > (c[i] || 0)) return true;
+    if ((l[i] || 0) < (c[i] || 0)) return false;
+  }
+  return false;
+}
 
-  autoUpdater.on('update-downloaded', (info) => {
-    dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      title: 'Update bereit',
-      message: `Slime Browser ${info.version} wurde heruntergeladen.`,
-      detail: 'Das Update wird beim nächsten Neustart installiert. Jetzt neu starten?',
-      buttons: ['Jetzt neu starten', 'Später'],
-      defaultId: 0,
-    }).then(({ response }) => {
-      if (response === 0) {
-        autoUpdater.quitAndInstall(false, true);
+function checkForAsarUpdate() {
+  const request = net.request('https://api.github.com/repos/Kovy97/slime_browser/releases/latest');
+  request.setHeader('Accept', 'application/vnd.github+json');
+  request.setHeader('User-Agent', 'SlimeBrowser/' + pkg.version);
+
+  let body = '';
+  request.on('response', (response) => {
+    response.on('data', (chunk) => { body += chunk.toString(); });
+    response.on('end', () => {
+      try {
+        const release = JSON.parse(body);
+        const latest = release.tag_name?.replace(/^v/, '');
+        if (!latest || !isNewerVersion(latest, pkg.version)) return;
+
+        const asarAsset = release.assets?.find(a => a.name === 'app.asar');
+        if (!asarAsset) {
+          console.log('[Slime Updater] No app.asar in release, skipping');
+          return;
+        }
+
+        dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: 'Update verfügbar',
+          message: `Slime Browser ${latest} ist verfügbar! (Aktuell: ${pkg.version})`,
+          detail: 'Das Update wird im Hintergrund heruntergeladen und beim Neustart angewendet.',
+          buttons: ['Jetzt updaten', 'Später'],
+          defaultId: 0,
+        }).then(({ response: btn }) => {
+          if (btn === 0) downloadAsarUpdate(asarAsset.browser_download_url, latest);
+        });
+      } catch (e) {
+        console.log('[Slime Updater] Check failed:', e.message);
       }
     });
   });
+  request.on('error', () => { /* no internet */ });
+  request.end();
+}
 
-  autoUpdater.on('error', (err) => {
-    console.log('[Slime Updater] Error:', err.message);
+function downloadAsarUpdate(url, version) {
+  const updateDir = path.join(app.getPath('userData'), 'pending-update');
+  if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
+
+  const tempPath = path.join(updateDir, 'app.asar');
+  const versionPath = path.join(updateDir, 'version.txt');
+  const file = fs.createWriteStream(tempPath);
+
+  mainWindow?.webContents.send('update-status', { status: 'downloading', version });
+
+  const request = net.request(url);
+  request.on('response', (response) => {
+    // Handle GitHub redirect
+    if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+      file.close();
+      const redirectUrl = Array.isArray(response.headers.location) ? response.headers.location[0] : response.headers.location;
+      downloadAsarUpdate(redirectUrl, version);
+      return;
+    }
+
+    const totalBytes = parseInt(response.headers['content-length'] || '0', 10);
+    let receivedBytes = 0;
+
+    response.on('data', (chunk) => {
+      file.write(chunk);
+      receivedBytes += chunk.length;
+      if (totalBytes > 0) {
+        const percent = Math.round((receivedBytes / totalBytes) * 100);
+        mainWindow?.webContents.send('update-status', { status: 'progress', percent, version });
+      }
+    });
+
+    response.on('end', () => {
+      file.end(() => {
+        fs.writeFileSync(versionPath, version, 'utf-8');
+        console.log(`[Slime Updater] Downloaded v${version} app.asar (${receivedBytes} bytes)`);
+
+        dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: 'Update bereit',
+          message: `Slime Browser ${version} wurde heruntergeladen.`,
+          detail: 'Jetzt neu starten um das Update anzuwenden?',
+          buttons: ['Jetzt neu starten', 'Beim nächsten Start'],
+          defaultId: 0,
+        }).then(({ response: btn }) => {
+          if (btn === 0) applyUpdateAndRestart();
+        });
+      });
+    });
   });
+  request.on('error', (err) => {
+    file.close();
+    console.log('[Slime Updater] Download failed:', err.message);
+  });
+  request.end();
+}
 
-  setTimeout(() => autoUpdater.checkForUpdates(), 3000);
+function applyUpdateAndRestart() {
+  const updateDir = path.join(app.getPath('userData'), 'pending-update');
+  const newAsar = path.join(updateDir, 'app.asar');
 
-  ipcMain.handle('check-for-updates', () => autoUpdater.checkForUpdates());
+  if (!fs.existsSync(newAsar)) return;
+
+  // The app.asar is inside resources/ next to the executable
+  const resourcesDir = path.join(path.dirname(app.getPath('exe')), 'resources');
+  const targetAsar = path.join(resourcesDir, 'app.asar');
+  const exePath = app.getPath('exe');
+
+  // Write a PowerShell update script that runs after app exits
+  const scriptPath = path.join(updateDir, 'update.ps1');
+  const script = `
+Start-Sleep -Seconds 2
+try {
+  Copy-Item -Path '${newAsar.replace(/'/g, "''")}' -Destination '${targetAsar.replace(/'/g, "''")}' -Force
+  Remove-Item -Path '${updateDir.replace(/'/g, "''")}' -Recurse -Force
+  Start-Process '${exePath.replace(/'/g, "''")}'
+} catch {
+  # If copy fails (e.g. permissions), try with elevation
+  Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command \\"Copy-Item -Path '${newAsar.replace(/'/g, "''")}' -Destination '${targetAsar.replace(/'/g, "''")}' -Force; Remove-Item -Path '${updateDir.replace(/'/g, "''")}' -Recurse -Force; Start-Process '${exePath.replace(/'/g, "''")}'\\""
+}
+`;
+  fs.writeFileSync(scriptPath, script, 'utf-8');
+
+  // Launch the updater script detached, then quit
+  const child = execFile('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+
+  app.quit();
+}
+
+// Apply pending update on startup (if previous graceful update didn't trigger)
+function applyPendingUpdate() {
+  const updateDir = path.join(app.getPath('userData'), 'pending-update');
+  const newAsar = path.join(updateDir, 'app.asar');
+  if (!fs.existsSync(newAsar)) return false;
+
+  try {
+    const resourcesDir = path.join(path.dirname(app.getPath('exe')), 'resources');
+    const targetAsar = path.join(resourcesDir, 'app.asar');
+    fs.copyFileSync(newAsar, targetAsar);
+    fs.rmSync(updateDir, { recursive: true, force: true });
+    console.log('[Slime Updater] Applied pending update on startup');
+    return true;
+  } catch (e) {
+    console.log('[Slime Updater] Could not apply pending update:', e.message);
+    return false;
+  }
+}
 
 app.on('window-all-closed', () => app.quit());
 
