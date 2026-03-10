@@ -128,7 +128,7 @@ contextBridge.exposeInMainWorld('slime', {
     return () => ipcRenderer.removeListener('open-url', handler);
   },
 
-  // Google Login popup (real BrowserWindow to bypass embedded webview block)
+  // Google Login (Firefox-UA BrowserWindow to bypass Google's embedded browser block)
   openGoogleLogin: (url) => {
     if (typeof url !== 'string') return Promise.reject('Invalid URL');
     return ipcRenderer.invoke('open-google-login', url);

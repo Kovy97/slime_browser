@@ -1,6 +1,6 @@
 {
   "name": "slime-browser",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "description": "Slime Browser - A Chromium-based browser with built-in adblock and YouTube tools",
   "main": "src/main.js",
   "scripts": {

@@ -384,22 +384,35 @@ ipcMain.on('window-maximize', () => {
 });
 ipcMain.on('window-close', () => mainWindow?.close());
 
-// Google Login Popup — opens accounts.google.com in a real BrowserWindow
-// instead of the webview, because Google blocks sign-in from embedded webviews.
-// Uses the same persist:slime session so cookies are shared automatically.
-let googleLoginWindow = null;
-ipcMain.handle('open-google-login', (_, url) => {
+// Google Login — Firefox-UA BrowserWindow.
+// Google blocks Chromium-embedded browsers but cannot detect a spoofed Firefox,
+// because there are no Chromium-specific JS APIs to fingerprint.
+// Uses a SEPARATE session partition for the login window so the Firefox UA +
+// removed Client Hints don't conflict with the main webview session's header hooks.
+// After login, cookies are copied to the main persist:slime session.
+let googleLoginWin = null;
+ipcMain.handle('open-google-login', async (_, url) => {
   if (!validateUrl(url)) return;
-  if (googleLoginWindow && !googleLoginWindow.isDestroyed()) {
-    googleLoginWindow.focus();
+  if (googleLoginWin && !googleLoginWin.isDestroyed()) {
+    googleLoginWin.focus();
     return;
   }
 
-  const chromeVersion = process.versions.chrome;
-  const chromeMajor = chromeVersion.split('.')[0];
-  const chromeUA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+  const firefoxUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0';
 
-  googleLoginWindow = new BrowserWindow({
+  // Use a separate session for login so Firefox UA settings don't affect main browsing
+  const loginSession = session.fromPartition('persist:slime-login');
+  loginSession.setUserAgent(firefoxUA);
+
+  // Remove ALL Chromium Client Hints — Firefox never sends these
+  loginSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = { ...details.requestHeaders };
+    const chHints = Object.keys(headers).filter(k => k.toLowerCase().startsWith('sec-ch-'));
+    for (const h of chHints) delete headers[h];
+    callback({ requestHeaders: headers });
+  });
+
+  googleLoginWin = new BrowserWindow({
     width: 500,
     height: 700,
     parent: mainWindow,
@@ -407,9 +420,7 @@ ipcMain.handle('open-google-login', (_, url) => {
     icon: path.join(__dirname, '..', 'Slime1.ico'),
     title: 'Google Sign-In',
     webPreferences: {
-      partition: 'persist:slime',
-      // contextIsolation OFF so the preload spoofing runs in the page's JS context
-      // This is safe: nodeIntegration is off, and this window only loads Google login
+      partition: 'persist:slime-login',
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
@@ -417,36 +428,52 @@ ipcMain.handle('open-google-login', (_, url) => {
     },
   });
 
-  googleLoginWindow.setMenuBarVisibility(false);
-  const ses = googleLoginWindow.webContents.session;
-  ses.setUserAgent(chromeUA);
+  googleLoginWin.setMenuBarVisibility(false);
+  googleLoginWin.webContents.loadURL(url);
 
-  googleLoginWindow.webContents.loadURL(url);
-
-  // Close the popup when the user finishes login (navigates away from accounts.google.com)
-  googleLoginWindow.webContents.on('did-navigate', (_, navUrl) => {
+  // When login finishes, copy Google cookies to main session and close
+  googleLoginWin.webContents.on('did-navigate', async (_, navUrl) => {
     try {
       const host = new URL(navUrl).hostname;
-      // User finished login — they've been redirected back to the target site
       if (!host.includes('accounts.google.com') &&
           !host.includes('accounts.youtube.com') &&
           !host.includes('myaccount.google.com') &&
           !host.includes('gds.google.com') &&
           !host.includes('consent.google.com')) {
-        // Small delay so cookies finalize
+        // Copy all Google/YouTube cookies to the main session
+        const mainSession = session.fromPartition('persist:slime');
+        const domains = ['.google.com', '.youtube.com', '.googlevideo.com', '.gstatic.com', '.googleapis.com'];
+        for (const domain of domains) {
+          const cookies = await loginSession.cookies.get({ domain });
+          for (const cookie of cookies) {
+            const cookieObj = {
+              url: `https://${cookie.domain.replace(/^\./, '')}${cookie.path || '/'}`,
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain,
+              path: cookie.path,
+              secure: cookie.secure,
+              httpOnly: cookie.httpOnly,
+              sameSite: cookie.sameSite || 'no_restriction',
+            };
+            if (cookie.expirationDate) cookieObj.expirationDate = cookie.expirationDate;
+            try { await mainSession.cookies.set(cookieObj); } catch (e) {}
+          }
+        }
         setTimeout(() => {
-          if (googleLoginWindow && !googleLoginWindow.isDestroyed()) {
-            mainWindow?.webContents.send('google-login-complete', navUrl);
-            googleLoginWindow.close();
+          if (googleLoginWin && !googleLoginWin.isDestroyed()) {
+            googleLoginWin.close();
           }
         }, 500);
       }
     } catch (e) {}
   });
 
-  googleLoginWindow.on('closed', () => {
-    googleLoginWindow = null;
-    mainWindow?.webContents.send('google-login-complete', null);
+  googleLoginWin.on('closed', () => {
+    googleLoginWin = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('google-login-complete', url);
+    }
   });
 });
 
