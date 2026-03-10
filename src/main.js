@@ -408,9 +408,12 @@ ipcMain.handle('open-google-login', (_, url) => {
     title: 'Google Sign-In',
     webPreferences: {
       partition: 'persist:slime',
-      contextIsolation: true,
+      // contextIsolation OFF so the preload spoofing runs in the page's JS context
+      // This is safe: nodeIntegration is off, and this window only loads Google login
+      contextIsolation: false,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
+      preload: path.join(__dirname, 'browser', 'ui', 'login-preload.js'),
     },
   });
 
