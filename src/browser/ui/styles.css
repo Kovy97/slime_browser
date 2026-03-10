@@ -619,6 +619,43 @@ body.sidebar-pinned #main {
   font-weight: 500;
 }
 
+/* Tab Mute Button */
+.tab-mute {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background var(--transition), color var(--transition);
+}
+
+.tab-mute .mute-icon-off { display: none; }
+.tab-mute .mute-icon-on { display: block; }
+.tab.muted .tab-mute .mute-icon-on { display: none; }
+.tab.muted .tab-mute .mute-icon-off { display: block; }
+
+/* Show mute button when tab has audio */
+.tab.audible .tab-mute,
+.tab.muted .tab-mute {
+  display: flex;
+}
+
+.tab-mute:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.tab.muted .tab-mute {
+  color: var(--danger);
+}
+
 .tab-close {
   width: 20px;
   height: 20px;

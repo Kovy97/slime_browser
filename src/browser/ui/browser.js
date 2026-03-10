@@ -88,6 +88,8 @@ function closeTab(id) {
     tab.webview.removeEventListener('did-stop-loading', tab._listeners?.stopLoading);
     tab.webview.removeEventListener('dom-ready', tab._listeners?.domReady);
     tab.webview.removeEventListener('new-window', tab._listeners?.newWindow);
+    tab.webview.removeEventListener('media-started-playing', tab._listeners?.mediaStarted);
+    tab.webview.removeEventListener('media-paused', tab._listeners?.mediaPaused);
     tab.webview.remove();
   }
 
@@ -142,6 +144,10 @@ function renderTab(tab) {
   el.innerHTML = `
     <div class="tab-favicon"><span>${escapeHtml(tab.title.charAt(0).toUpperCase())}</span></div>
     <span class="tab-title">${escapeHtml(tab.title)}</span>
+    <button class="tab-mute" title="Mute/Unmute Tab">
+      <svg class="mute-icon-on" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 5.5h2.5L8 2.5v11l-3.5-3H2a.5.5 0 0 1-.5-.5V6a.5.5 0 0 1 .5-.5z" fill="currentColor"/><path d="M10.5 5.5a3 3 0 0 1 0 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M12.5 3.5a6 6 0 0 1 0 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      <svg class="mute-icon-off" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 5.5h2.5L8 2.5v11l-3.5-3H2a.5.5 0 0 1-.5-.5V6a.5.5 0 0 1 .5-.5z" fill="currentColor"/><path d="M11 5.5l4 5M15 5.5l-4 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    </button>
     <button class="tab-close" title="Close Tab">&times;</button>
   `;
 
@@ -151,12 +157,26 @@ function renderTab(tab) {
     }
   });
 
+  el.querySelector('.tab-mute').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleTabMute(tab.id);
+  });
+
   el.querySelector('.tab-close').addEventListener('click', (e) => {
     e.stopPropagation();
     closeTab(tab.id);
   });
 
   tabsContainer.appendChild(el);
+}
+
+function toggleTabMute(id) {
+  const tab = tabMap.get(id);
+  if (!tab || !tab.webview) return;
+  const muted = !tab.webview.isAudioMuted();
+  tab.webview.setAudioMuted(muted);
+  const tabEl = document.querySelector(`[data-tab-id="${id}"]`);
+  if (tabEl) tabEl.classList.toggle('muted', muted);
 }
 
 function updateTabTitle(id, title) {
@@ -311,6 +331,19 @@ function createWebview(tabId, url) {
     }
   };
   webview.addEventListener('new-window', _listeners.newWindow);
+
+  // Track audio playing state for tab mute indicator
+  _listeners.mediaStarted = () => {
+    const tabEl = document.querySelector(`[data-tab-id="${tabId}"]`);
+    if (tabEl) tabEl.classList.add('audible');
+  };
+  webview.addEventListener('media-started-playing', _listeners.mediaStarted);
+
+  _listeners.mediaPaused = () => {
+    const tabEl = document.querySelector(`[data-tab-id="${tabId}"]`);
+    if (tabEl) tabEl.classList.remove('audible');
+  };
+  webview.addEventListener('media-paused', _listeners.mediaPaused);
 
   // Handle webview crashes and load failures
   webview.addEventListener('crashed', () => {
