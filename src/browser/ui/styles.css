@@ -581,15 +581,16 @@ body.sidebar-pinned #main {
 
 #webview-container webview {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
-  display: none;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 #webview-container webview.active {
-  display: flex;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 /* ==========================================
@@ -725,26 +726,21 @@ body.sidebar-pinned #main {
 .panel-overlay {
   position: fixed;
   top: 0;
-  left: var(--sidebar-expanded);
+  left: var(--sidebar-width);
   width: 360px;
   height: 100vh;
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
-  z-index: 95;
-  display: flex;
+  z-index: 101;
   flex-direction: column;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
-  clip-path: inset(0 100% 0 0);
-  transition: clip-path 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
-  will-change: clip-path;
 }
 
-#sidebar:hover ~ .panel-overlay,
-#sidebar:focus-within ~ .panel-overlay,
-#sidebar.pinned ~ .panel-overlay,
-.panel-overlay:hover,
-.panel-overlay:focus-within {
-  clip-path: inset(0 0 0 0);
+/* Shift panels when sidebar expands */
+#sidebar:hover ~ .panel-overlay[style*="display: flex"],
+#sidebar:focus-within ~ .panel-overlay[style*="display: flex"],
+#sidebar.pinned ~ .panel-overlay[style*="display: flex"] {
+  left: var(--sidebar-expanded);
 }
 
 .panel-header {

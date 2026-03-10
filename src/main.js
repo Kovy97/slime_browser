@@ -1,14 +1,45 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
+const pkg = require('../package.json');
 
 // Chromium performance flags (must be set before app.whenReady)
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');  // Enable WebGL on all GPUs
 app.commandLine.appendSwitch('disable-background-networking');
 app.commandLine.appendSwitch('disable-component-update');
+
+// ==========================================
+// Single Instance & URL Handling (default browser support)
+// ==========================================
+
+function getUrlFromArgs(args) {
+  for (const arg of args) {
+    if (arg.startsWith('http://') || arg.startsWith('https://') || arg.endsWith('.html') || arg.endsWith('.htm')) {
+      return arg;
+    }
+  }
+  return null;
+}
+
+let pendingUrl = getUrlFromArgs(process.argv.slice(1));
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
+
+app.on('second-instance', (_, argv) => {
+  const url = getUrlFromArgs(argv.slice(1));
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    if (url) mainWindow.webContents.send('open-url', url);
+  }
+});
 
 let mainWindow;
 
@@ -244,7 +275,16 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'browser', 'ui', 'index.html'));
   Menu.setApplicationMenu(null);
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    // Open URL from command line args (default browser)
+    if (pendingUrl) {
+      setTimeout(() => {
+        mainWindow.webContents.send('open-url', pendingUrl);
+        pendingUrl = null;
+      }, 500);
+    }
+  });
 
   mainWindow.on('maximize', () => {
     mainWindow.webContents.send('window-state', 'maximized');
@@ -359,7 +399,60 @@ app.whenReady().then(async () => {
   ipcMain.handle('downloads-get', () => Array.from(downloads.values()));
 
   createWindow();
+
+  // ==========================================
+  // Auto-Update Check (GitHub Releases)
+  // ==========================================
+  setTimeout(() => checkForUpdates(), 3000);
 });
+
+function checkForUpdates() {
+  const request = net.request('https://api.github.com/repos/Kovy97/slime_browser/releases/latest');
+  request.setHeader('Accept', 'application/vnd.github+json');
+  request.setHeader('User-Agent', 'SlimeBrowser/' + pkg.version);
+
+  let body = '';
+  request.on('response', (response) => {
+    response.on('data', (chunk) => { body += chunk.toString(); });
+    response.on('end', () => {
+      try {
+        const release = JSON.parse(body);
+        const latest = release.tag_name?.replace(/^v/, '');
+        if (!latest) return;
+        if (isNewerVersion(latest, pkg.version)) {
+          const asset = release.assets?.find(a => a.name.endsWith('.exe'));
+          const downloadUrl = asset?.browser_download_url || release.html_url;
+          dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            title: 'Update verfügbar',
+            message: `Slime Browser ${latest} ist verfügbar! (Aktuell: ${pkg.version})`,
+            detail: release.body || '',
+            buttons: ['Herunterladen', 'Später'],
+            defaultId: 0,
+          }).then(({ response }) => {
+            if (response === 0) shell.openExternal(downloadUrl);
+          });
+        }
+      } catch (e) { /* ignore parse errors */ }
+    });
+  });
+  request.on('error', () => { /* no internet, skip */ });
+  request.end();
+}
+
+function isNewerVersion(latest, current) {
+  const l = latest.split('.').map(Number);
+  const c = current.split('.').map(Number);
+  for (let i = 0; i < Math.max(l.length, c.length); i++) {
+    const lv = l[i] || 0;
+    const cv = c[i] || 0;
+    if (lv > cv) return true;
+    if (lv < cv) return false;
+  }
+  return false;
+}
+
+ipcMain.handle('check-for-updates', () => checkForUpdates());
 
 app.on('window-all-closed', () => app.quit());
 

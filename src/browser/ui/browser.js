@@ -208,6 +208,7 @@ function createWebview(tabId, url) {
   webview.setAttribute('partition', 'persist:slime');
   webview.setAttribute('autosize', 'on');
   webview.setAttribute('allowpopups', '');
+  webview.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes, webgl=yes, enableWebSQL=no');
   if (webviewPreloadPath) {
     webview.setAttribute('preload', `file://${webviewPreloadPath}`);
   }
@@ -1794,10 +1795,19 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Close panels when clicking on main content area
-document.getElementById('main').addEventListener('click', () => {
-  closeAllPanels();
+// Close panels when clicking anywhere outside a panel
+document.addEventListener('mousedown', (e) => {
+  const clickedPanel = e.target.closest('.panel-overlay');
+  const clickedSidebarBtn = e.target.closest('.sidebar-btn, #btn-bookmarks-panel, #btn-history, #btn-downloads, #btn-passwords, #macros-btn');
+  if (!clickedPanel && !clickedSidebarBtn) {
+    closeAllPanels();
+  }
 });
+
+// Close panels when clicking on webview area
+webviewContainer.addEventListener('mousedown', () => closeAllPanels(), true);
+// Also catch when webview steals focus (e.g. clicking inside page content)
+window.addEventListener('blur', () => closeAllPanels());
 
 document.getElementById('btn-minimize').addEventListener('click', () => window.slime.minimize());
 document.getElementById('btn-maximize').addEventListener('click', () => window.slime.maximize());
@@ -1852,6 +1862,11 @@ async function init() {
     renderDownloadItem(dl);
   });
   showDownloadEmpty();
+
+  // Handle URLs opened from external apps (default browser)
+  window.slime.onOpenUrl((url) => {
+    createTab(url);
+  });
 }
 
 init();

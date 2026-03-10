@@ -1,6 +1,6 @@
 {
   "name": "slime-browser",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Slime Browser - A Chromium-based browser with built-in adblock and YouTube tools",
   "main": "src/main.js",
   "scripts": {
@@ -29,11 +29,18 @@
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "Slime1.ico",
       "uninstallerIcon": "Slime1.ico",
-      "shortcutName": "Slime Browser"
+      "shortcutName": "Slime Browser",
+      "include": "build/installer.nsh"
     },
     "files": [
       "src/**/*",
-      "Slime1.ico"
-    ]
+      "Slime1.ico",
+      "package.json"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "Kovy97",
+      "repo": "slime_browser"
+    }
   }
 }

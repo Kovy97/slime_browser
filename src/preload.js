@@ -61,4 +61,9 @@ contextBridge.exposeInMainWorld('slime', {
     get: () => ipcRenderer.invoke('macros-get'),
     save: (macros) => ipcRenderer.invoke('macros-save', macros),
   },
+
+  // Open URL from external source (default browser)
+  onOpenUrl: (callback) => {
+    ipcRenderer.on('open-url', (_, url) => callback(url));
+  },
 });
