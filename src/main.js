@@ -4,7 +4,7 @@ const fs = require('fs');
 const originalFs = require('original-fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const pkg = require('../package.json');
 
@@ -631,25 +631,32 @@ function applyUpdateAndRestart() {
   const targetAsar = path.join(resourcesDir, 'app.asar');
   const exePath = app.getPath('exe');
 
-  // Write a PowerShell update script that runs after app exits
-  const scriptPath = path.join(updateDir, 'update.ps1');
-  const script = `
-Start-Sleep -Seconds 2
-try {
-  Copy-Item -Path '${newAsar.replace(/'/g, "''")}' -Destination '${targetAsar.replace(/'/g, "''")}' -Force
-  Remove-Item -Path '${updateDir.replace(/'/g, "''")}' -Recurse -Force
-  Start-Process '${exePath.replace(/'/g, "''")}'
-} catch {
-  # If copy fails (e.g. permissions), try with elevation
-  Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -Command \\"Copy-Item -Path '${newAsar.replace(/'/g, "''")}' -Destination '${targetAsar.replace(/'/g, "''")}' -Force; Remove-Item -Path '${updateDir.replace(/'/g, "''")}' -Recurse -Force; Start-Process '${exePath.replace(/'/g, "''")}'\\""
-}
+  // Write a batch update script that runs after app exits
+  const scriptPath = path.join(updateDir, 'update.cmd');
+  const logPath = path.join(updateDir, 'update.log');
+  const script = `@echo off\r
+echo [%date% %time%] Update starting... > "${logPath}"\r
+timeout /t 3 /nobreak > nul\r
+echo [%date% %time%] Copying asar... >> "${logPath}"\r
+copy /Y "${newAsar}" "${targetAsar}" >> "${logPath}" 2>&1\r
+if errorlevel 1 (\r
+  echo [%date% %time%] Copy failed, retrying... >> "${logPath}"\r
+  timeout /t 2 /nobreak > nul\r
+  copy /Y "${newAsar}" "${targetAsar}" >> "${logPath}" 2>&1\r
+)\r
+echo [%date% %time%] Starting browser... >> "${logPath}"\r
+start "" "${exePath}"\r
+echo [%date% %time%] Cleaning up... >> "${logPath}"\r
+del "${newAsar}" 2>nul\r
+del "${path.join(updateDir, 'version.txt')}" 2>nul\r
 `;
-  fs.writeFileSync(scriptPath, script, 'utf-8');
+  originalFs.writeFileSync(scriptPath, script, 'utf-8');
 
   // Launch the updater script detached, then quit
-  const child = execFile('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath], {
+  const child = spawn('cmd.exe', ['/c', scriptPath], {
     detached: true,
     stdio: 'ignore',
+    windowsHide: true,
   });
   child.unref();
 
