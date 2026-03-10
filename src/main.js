@@ -1,9 +1,9 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
-const pkg = require('../package.json');
+const { autoUpdater } = require('electron-updater');
 
 // Chromium performance flags (must be set before app.whenReady)
 app.commandLine.appendSwitch('enable-gpu-rasterization');
@@ -401,58 +401,48 @@ app.whenReady().then(async () => {
   createWindow();
 
   // ==========================================
-  // Auto-Update Check (GitHub Releases)
+  // Auto-Update (electron-updater)
   // ==========================================
-  setTimeout(() => checkForUpdates(), 3000);
-});
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = console;
 
-function checkForUpdates() {
-  const request = net.request('https://api.github.com/repos/Kovy97/slime_browser/releases/latest');
-  request.setHeader('Accept', 'application/vnd.github+json');
-  request.setHeader('User-Agent', 'SlimeBrowser/' + pkg.version);
-
-  let body = '';
-  request.on('response', (response) => {
-    response.on('data', (chunk) => { body += chunk.toString(); });
-    response.on('end', () => {
-      try {
-        const release = JSON.parse(body);
-        const latest = release.tag_name?.replace(/^v/, '');
-        if (!latest) return;
-        if (isNewerVersion(latest, pkg.version)) {
-          const asset = release.assets?.find(a => a.name.endsWith('.exe'));
-          const downloadUrl = asset?.browser_download_url || release.html_url;
-          dialog.showMessageBox(mainWindow, {
-            type: 'info',
-            title: 'Update verfügbar',
-            message: `Slime Browser ${latest} ist verfügbar! (Aktuell: ${pkg.version})`,
-            detail: release.body || '',
-            buttons: ['Herunterladen', 'Später'],
-            defaultId: 0,
-          }).then(({ response }) => {
-            if (response === 0) shell.openExternal(downloadUrl);
-          });
-        }
-      } catch (e) { /* ignore parse errors */ }
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'downloading',
+      version: info.version,
     });
   });
-  request.on('error', () => { /* no internet, skip */ });
-  request.end();
-}
 
-function isNewerVersion(latest, current) {
-  const l = latest.split('.').map(Number);
-  const c = current.split('.').map(Number);
-  for (let i = 0; i < Math.max(l.length, c.length); i++) {
-    const lv = l[i] || 0;
-    const cv = c[i] || 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  return false;
-}
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'progress',
+      percent: Math.round(progress.percent),
+    });
+  });
 
-ipcMain.handle('check-for-updates', () => checkForUpdates());
+  autoUpdater.on('update-downloaded', (info) => {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Update bereit',
+      message: `Slime Browser ${info.version} wurde heruntergeladen.`,
+      detail: 'Das Update wird beim nächsten Neustart installiert. Jetzt neu starten?',
+      buttons: ['Jetzt neu starten', 'Später'],
+      defaultId: 0,
+    }).then(({ response }) => {
+      if (response === 0) {
+        autoUpdater.quitAndInstall(false, true);
+      }
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.log('[Slime Updater] Error:', err.message);
+  });
+
+  setTimeout(() => autoUpdater.checkForUpdates(), 3000);
+
+  ipcMain.handle('check-for-updates', () => autoUpdater.checkForUpdates());
 
 app.on('window-all-closed', () => app.quit());
 
