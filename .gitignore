@@ -3,3 +3,7 @@ dist/
 out/
 .env
 *.log
+.claude/
+get-cred.ps1
+update-release.js
+create-release.js

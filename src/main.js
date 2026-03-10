@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const originalFs = require('original-fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
 const { execFile } = require('child_process');
@@ -550,7 +551,7 @@ function downloadAsarUpdate(url, version) {
 
   const tempPath = path.join(updateDir, 'app.asar');
   const versionPath = path.join(updateDir, 'version.txt');
-  const file = fs.createWriteStream(tempPath);
+  const file = originalFs.createWriteStream(tempPath);
 
   mainWindow?.webContents.send('update-status', { status: 'downloading', version });
 
@@ -592,7 +593,7 @@ function downloadAsarUpdate(url, version) {
         fs.writeFileSync(versionPath, version, 'utf-8');
         // Log SHA256 checksum for integrity verification
         try {
-          const fileData = fs.readFileSync(tempPath);
+          const fileData = originalFs.readFileSync(tempPath);
           const hash = crypto.createHash('sha256').update(fileData).digest('hex');
           console.log(`[Slime Updater] Downloaded v${version} app.asar (${receivedBytes} bytes, SHA256: ${hash})`);
         } catch (e) {
@@ -623,7 +624,7 @@ function applyUpdateAndRestart() {
   const updateDir = path.join(app.getPath('userData'), 'pending-update');
   const newAsar = path.join(updateDir, 'app.asar');
 
-  if (!fs.existsSync(newAsar)) return;
+  if (!originalFs.existsSync(newAsar)) return;
 
   // The app.asar is inside resources/ next to the executable
   const resourcesDir = path.join(path.dirname(app.getPath('exe')), 'resources');
@@ -659,13 +660,13 @@ try {
 function applyPendingUpdate() {
   const updateDir = path.join(app.getPath('userData'), 'pending-update');
   const newAsar = path.join(updateDir, 'app.asar');
-  if (!fs.existsSync(newAsar)) return false;
+  if (!originalFs.existsSync(newAsar)) return false;
 
   try {
     const resourcesDir = path.join(path.dirname(app.getPath('exe')), 'resources');
     const targetAsar = path.join(resourcesDir, 'app.asar');
-    fs.copyFileSync(newAsar, targetAsar);
-    fs.rmSync(updateDir, { recursive: true, force: true });
+    originalFs.copyFileSync(newAsar, targetAsar);
+    originalFs.rmSync(updateDir, { recursive: true, force: true });
     console.log('[Slime Updater] Applied pending update on startup');
     return true;
   } catch (e) {
