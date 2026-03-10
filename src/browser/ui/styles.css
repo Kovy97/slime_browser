@@ -685,6 +685,19 @@ body.sidebar-pinned #main {
   opacity: 1 !important;
 }
 
+/* Tab Drag-and-Drop */
+.tab.dragging {
+  opacity: 0.4;
+}
+
+.tab.drag-over-top {
+  border-top: 2px solid var(--accent);
+}
+
+.tab.drag-over-bottom {
+  border-bottom: 2px solid var(--accent);
+}
+
 /* --- Sidebar Footer --- */
 #sidebar-footer {
   padding: 8px;
@@ -2029,4 +2042,76 @@ select:focus-visible {
 .panel-item-edit:hover {
   background: var(--bg-active);
   color: var(--text-primary);
+}
+
+/* ==========================================
+   Find Bar
+   ========================================== */
+
+#find-bar {
+  position: absolute;
+  top: calc(var(--titlebar-height) + 6px);
+  right: 12px;
+  z-index: var(--z-panel);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+#find-input {
+  width: 200px;
+  padding: 4px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+#find-input:focus {
+  border-color: var(--accent);
+}
+
+#find-input::placeholder {
+  color: var(--text-muted);
+}
+
+#find-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 48px;
+  text-align: center;
+  white-space: nowrap;
+  user-select: none;
+}
+
+#find-bar button {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: background var(--transition), color var(--transition);
+}
+
+#find-bar button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+#find-close {
+  font-size: 16px;
 }

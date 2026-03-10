@@ -98,6 +98,12 @@ const btnForward = document.getElementById('btn-forward');
 const btnReload = document.getElementById('btn-reload');
 const newTabBtn = document.getElementById('new-tab-btn');
 const ntpSearchInput = document.getElementById('ntp-search-input');
+const findBar = document.getElementById('find-bar');
+const findInput = document.getElementById('find-input');
+const findCount = document.getElementById('find-count');
+const findPrev = document.getElementById('find-prev');
+const findNext = document.getElementById('find-next');
+const findClose = document.getElementById('find-close');
 
 // ==========================================
 // Tab Management
@@ -144,6 +150,7 @@ function closeTab(id) {
     tab.webview.removeEventListener('media-started-playing', tab._listeners?.mediaStarted);
     tab.webview.removeEventListener('media-paused', tab._listeners?.mediaPaused);
     tab.webview.removeEventListener('context-menu', tab._listeners?.contextMenu);
+    tab.webview.removeEventListener('found-in-page', tab._listeners?.foundInPage);
     tab.webview.remove();
   }
 
@@ -165,6 +172,7 @@ function switchToTab(id) {
   activeTabId = id;
   hideSettings();
   closeAllPanels();
+  closeFindBar();
 
   document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
   const tabEl = document.querySelector(`[data-tab-id="${id}"]`);
@@ -219,6 +227,66 @@ function renderTab(tab) {
   el.querySelector('.tab-close').addEventListener('click', (e) => {
     e.stopPropagation();
     closeTab(tab.id);
+  });
+
+  // --- Drag-and-drop reordering ---
+  el.draggable = true;
+
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', tab.id);
+    el.classList.add('dragging');
+  });
+
+  el.addEventListener('dragend', () => {
+    el.classList.remove('dragging');
+    document.querySelectorAll('.tab.drag-over-top, .tab.drag-over-bottom').forEach(t => {
+      t.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+  });
+
+  el.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = el.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    el.classList.remove('drag-over-top', 'drag-over-bottom');
+    if (e.clientY < midY) {
+      el.classList.add('drag-over-top');
+    } else {
+      el.classList.add('drag-over-bottom');
+    }
+  });
+
+  el.addEventListener('dragleave', () => {
+    el.classList.remove('drag-over-top', 'drag-over-bottom');
+  });
+
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    el.classList.remove('drag-over-top', 'drag-over-bottom');
+    const draggedId = e.dataTransfer.getData('text/plain');
+    if (draggedId === tab.id) return;
+
+    const srcIdx = tabs.findIndex(t => t.id === draggedId);
+    const dstIdx = tabs.findIndex(t => t.id === tab.id);
+    if (srcIdx === -1 || dstIdx === -1) return;
+
+    // Remove source from array and reinsert at target position
+    const [moved] = tabs.splice(srcIdx, 1);
+    const rect = el.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const insertIdx = e.clientY < midY ? dstIdx : dstIdx + (srcIdx < dstIdx ? 0 : 1);
+    tabs.splice(insertIdx > tabs.length ? tabs.length : insertIdx, 0, moved);
+
+    // Rearrange DOM to match the new tabs array order
+    const draggedEl = document.querySelector(`[data-tab-id="${draggedId}"]`);
+    if (!draggedEl) return;
+    if (e.clientY < midY) {
+      tabsContainer.insertBefore(draggedEl, el);
+    } else {
+      tabsContainer.insertBefore(draggedEl, el.nextSibling);
+    }
   });
 
   tabsContainer.appendChild(el);
@@ -414,6 +482,15 @@ function createWebview(tabId, url) {
     });
   };
   webview.addEventListener('context-menu', _listeners.contextMenu);
+
+  // Find in page result count
+  _listeners.foundInPage = (e) => {
+    if (e.result && tabId === activeTabId) {
+      const { activeMatchOrdinal, matches } = e.result;
+      findCount.textContent = matches > 0 ? `${activeMatchOrdinal} of ${matches}` : 'No matches';
+    }
+  };
+  webview.addEventListener('found-in-page', _listeners.foundInPage);
 
   // Handle webview crashes and load failures
   webview.addEventListener('crashed', () => {
@@ -2165,6 +2242,58 @@ btnReload.addEventListener('click', () => {
 
 newTabBtn.addEventListener('click', () => createTab());
 
+// ==========================================
+// Find in Page
+// ==========================================
+
+function openFindBar() {
+  findBar.style.display = 'flex';
+  findInput.focus();
+  findInput.select();
+}
+
+function closeFindBar() {
+  findBar.style.display = 'none';
+  findInput.value = '';
+  findCount.textContent = '';
+  const tab = tabMap.get(activeTabId);
+  if (tab?.webview) {
+    try { tab.webview.stopFindInPage('clearSelection'); } catch(e) {}
+  }
+}
+
+function findInPage(forward = true, findNext = false) {
+  const text = findInput.value.trim();
+  const tab = tabMap.get(activeTabId);
+  if (!text || !tab?.webview) {
+    findCount.textContent = '';
+    if (tab?.webview) {
+      try { tab.webview.stopFindInPage('clearSelection'); } catch(e) {}
+    }
+    return;
+  }
+  tab.webview.findInPage(text, { forward, findNext });
+}
+
+findInput.addEventListener('input', () => {
+  findInPage(true, false);
+});
+
+findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    findInPage(!e.shiftKey, true);
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFindBar();
+  }
+});
+
+findNext.addEventListener('click', () => findInPage(true, true));
+findPrev.addEventListener('click', () => findInPage(false, true));
+findClose.addEventListener('click', () => closeFindBar());
+
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === 't') {
     e.preventDefault();
@@ -2183,6 +2312,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     bookmarkBtn.click();
   }
+  if (e.ctrlKey && e.key === 'f') {
+    e.preventDefault();
+    openFindBar();
+  }
   if (e.key === 'F5') {
     e.preventDefault();
     const tab = tabMap.get(activeTabId);
@@ -2197,6 +2330,9 @@ document.addEventListener('keydown', (e) => {
     try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(ex) { console.warn('[Slime]', ex.message || ex); }
   }
   if (e.key === 'Escape') {
+    if (findBar.style.display !== 'none') {
+      closeFindBar();
+    }
     closeAllPanels();
   }
 });
