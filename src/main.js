@@ -674,18 +674,42 @@ app.whenReady().then(async () => {
       }
     })();`;
 
-    // Inject into every webview as soon as it's created
+    // Helper: inject anti-detection into a frame and all its children recursively
+    function injectAllFrames(mainFrame) {
+      try {
+        mainFrame.executeJavaScript(antiDetectionScript).catch(() => {});
+        for (const child of mainFrame.frames) {
+          injectAllFrames(child);
+        }
+      } catch (e) {}
+    }
+
+    // Inject into every webview — ALL frames including Cloudflare Turnstile iframes
     app.on('web-contents-created', (_, contents) => {
       if (contents.getType() === 'webview') {
-        // Inject at frame creation — earliest possible moment
+        // Inject into main frame at navigation start
         contents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
           if (isMainFrame) {
             contents.executeJavaScript(antiDetectionScript).catch(() => {});
           }
         });
-        // Backup: also inject at dom-ready in case did-start-navigation was too early
+
+        // Inject into ALL frames (main + child iframes like Turnstile) at dom-ready
         contents.on('dom-ready', () => {
-          contents.executeJavaScript(antiDetectionScript).catch(() => {});
+          try { injectAllFrames(contents.mainFrame); } catch (e) {}
+        });
+
+        // Inject into new iframes as they finish loading (catches Turnstile iframe)
+        contents.on('did-frame-finish-load', (event, isMainFrame) => {
+          try { injectAllFrames(contents.mainFrame); } catch (e) {}
+        });
+
+        // Also catch frames created after initial load (lazy-loaded Turnstile)
+        contents.on('frame-created', (event, details) => {
+          // Small delay to let the frame initialize its JS context
+          setTimeout(() => {
+            try { injectAllFrames(contents.mainFrame); } catch (e) {}
+          }, 100);
         });
       }
     });
