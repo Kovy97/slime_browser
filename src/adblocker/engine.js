@@ -139,6 +139,13 @@ const WHITELIST_REGEX = new RegExp([
   'uimserv\\.net',
   'ui-portal\\.de',
   'uicdn\\.com',
+  // Cloudflare challenge/protection — MUST NOT be blocked
+  'challenges\\.cloudflare\\.com',
+  'cloudflareinsights\\.com',
+  '\\/cdn-cgi\\/',
+  'cloudflare\\.com\\/cdn-cgi',
+  'turnstile\\.cloudflare\\.com',
+  'cloudflare-dns\\.com',
 ].join('|'), 'i');
 
 /**
@@ -194,7 +201,7 @@ function shouldBlock(url) {
 
 const TOTAL_RULES = BLOCK_DOMAINS.size + 36; // Set entries + regex alternations
 
-async function setupAdblocker(browserSession, onBlocked) {
+async function setupAdblocker(browserSession, onBlocked, chromeInfo) {
   browserSession.webRequest.onBeforeRequest(
     { urls: ['*://*/*'] },
     (details, callback) => {
@@ -212,21 +219,38 @@ async function setupAdblocker(browserSession, onBlocked) {
     (details) => {
       if (details.redirectURL && shouldBlock(details.redirectURL)) {
         onBlocked(1);
-        // Can't cancel redirects, but log it for awareness
         console.log('[Slime Adblocker] Blocked redirect to:', details.redirectURL.substring(0, 60));
       }
     }
   );
 
+  // IMPORTANT: Only ONE onBeforeSendHeaders handler per session in Electron.
+  // This handler combines: adblocker headers + Sec-CH-UA Chrome spoofing.
+  const { chromeMajor, chromeVersion } = chromeInfo || {};
   browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders };
+
+    // --- Adblocker: remove tracking headers ---
     delete headers['X-Client-Data'];
-    // Remove fingerprinting headers
-    delete headers['Sec-CH-UA-Full-Version-List'];
-    delete headers['Sec-CH-UA-Model'];
-    delete headers['Sec-CH-UA-Platform-Version'];
     headers['DNT'] = '1';
     headers['Sec-GPC'] = '1';
+
+    // --- Chrome identity: override Sec-CH-UA so sites see "Google Chrome" ---
+    if (chromeMajor) {
+      const chUaKey = Object.keys(headers).find(k => k.toLowerCase() === 'sec-ch-ua');
+      if (chUaKey) {
+        headers[chUaKey] = `"Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}", "Not_A Brand";v="24"`;
+      }
+      const fvKey = Object.keys(headers).find(k => k.toLowerCase() === 'sec-ch-ua-full-version-list');
+      if (fvKey) {
+        headers[fvKey] = `"Google Chrome";v="${chromeVersion}", "Chromium";v="${chromeVersion}", "Not_A Brand";v="24.0.0.0"`;
+      }
+    }
+
+    // Remove extra fingerprinting hints
+    delete headers['Sec-CH-UA-Model'];
+    delete headers['Sec-CH-UA-Platform-Version'];
+
     callback({ requestHeaders: headers });
   });
 
