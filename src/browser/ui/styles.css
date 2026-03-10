@@ -348,6 +348,21 @@ body.sidebar-pinned #main {
   pointer-events: none;
 }
 
+#url-bar-wrapper {
+  position: relative;
+  opacity: 0;
+  max-height: 0;
+  overflow: visible;
+  transition: opacity var(--transition), max-height var(--transition);
+}
+
+#sidebar:hover #url-bar-wrapper,
+#sidebar:focus-within #url-bar-wrapper,
+#sidebar.pinned #url-bar-wrapper {
+  opacity: 1;
+  max-height: 32px;
+}
+
 #url-bar-container {
   display: flex;
   align-items: center;
@@ -356,24 +371,90 @@ body.sidebar-pinned #main {
   border-radius: var(--radius-sm);
   padding: 0 4px 0 10px;
   height: 32px;
-  opacity: 0;
-  max-height: 0;
-  overflow: hidden;
-  border-color: transparent;
-  transition: opacity var(--transition), max-height var(--transition), border-color var(--transition), background var(--transition);
-}
-
-#sidebar:hover #url-bar-container,
-#sidebar:focus-within #url-bar-container,
-#sidebar.pinned #url-bar-container {
-  opacity: 1;
-  max-height: 32px;
-  border-color: var(--border);
+  transition: border-color var(--transition), background var(--transition);
 }
 
 #url-bar-container:focus-within {
   border-color: var(--accent-medium);
   background: var(--bg-elevated);
+}
+
+#url-bar-container.ac-open {
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+#autocomplete-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent-medium);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: var(--z-panel);
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dim) transparent;
+}
+
+#autocomplete-dropdown.visible {
+  display: block;
+}
+
+.ac-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background var(--transition);
+  overflow: hidden;
+}
+
+.ac-item:hover,
+.ac-item.selected {
+  background: var(--bg-hover);
+}
+
+.ac-item-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+
+.ac-item-icon.ac-bookmark {
+  color: var(--accent);
+}
+
+.ac-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ac-item-title {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ac-item-url {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ac-match {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 #url-bar {

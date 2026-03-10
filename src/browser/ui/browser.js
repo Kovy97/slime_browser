@@ -37,6 +37,8 @@ const tabsContainer = document.getElementById('tabs-container');
 const webviewContainer = document.getElementById('webview-container');
 const newTabPage = document.getElementById('new-tab-page');
 const urlBar = document.getElementById('url-bar');
+const urlBarContainer = document.getElementById('url-bar-container');
+const acDropdown = document.getElementById('autocomplete-dropdown');
 const blockedCountEl = document.getElementById('blocked-count');
 const btnBack = document.getElementById('btn-back');
 const btnForward = document.getElementById('btn-forward');
@@ -1864,14 +1866,163 @@ function closeAllPanels() {
 // Event Listeners
 // ==========================================
 
+// ==========================================
+// URL Autocomplete
+// ==========================================
+
+let acItems = [];
+let acIndex = -1;
+let acDebounce = null;
+let acCache = null; // { bookmarks, ts }
+
+function acHighlight(text, query) {
+  if (!query) return text;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text;
+  const before = text.substring(0, idx);
+  const match = text.substring(idx, idx + query.length);
+  const after = text.substring(idx + query.length);
+  return `${before}<span class="ac-match">${match}</span>${after}`;
+}
+
+async function acFetch(query) {
+  if (!query || query.length < 1) return [];
+
+  const [history, bookmarks] = await Promise.all([
+    window.slime.historyGet(query),
+    (acCache && Date.now() - acCache.ts < 30000)
+      ? Promise.resolve(acCache.bookmarks)
+      : window.slime.bookmarksGet().then(b => { acCache = { bookmarks: b, ts: Date.now() }; return b; })
+  ]);
+
+  const q = query.toLowerCase();
+  const seen = new Set();
+  const results = [];
+
+  // Score and deduplicate bookmarks (priority)
+  for (const b of bookmarks) {
+    const url = b.url || '';
+    const title = b.title || url;
+    if (!url.toLowerCase().includes(q) && !title.toLowerCase().includes(q)) continue;
+    const key = url.replace(/\/+$/, '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({ url, title, type: 'bookmark', score: 100 });
+  }
+
+  // Score history entries
+  for (const h of history) {
+    const url = h.url || '';
+    const title = h.title || url;
+    const key = url.replace(/\/+$/, '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let score = 0;
+    const urlLow = url.toLowerCase();
+    const titleLow = title.toLowerCase();
+    if (urlLow.startsWith('https://' + q) || urlLow.startsWith('http://' + q)) score += 50;
+    else if (urlLow.includes('://' + q)) score += 40;
+    else if (titleLow.startsWith(q)) score += 30;
+    else if (urlLow.includes(q)) score += 20;
+    else score += 10;
+    results.push({ url, title, type: 'history', score });
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, 8);
+}
+
+function acRender(query) {
+  acDropdown.innerHTML = '';
+  if (acItems.length === 0) {
+    acHide();
+    return;
+  }
+
+  const historyIcon = '<svg class="ac-item-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.5V8l2.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+  const bookmarkIcon = '<svg class="ac-item-icon ac-bookmark" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 2h8a1 1 0 0 1 1 1v11.5l-5-3-5 3V3a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.2" fill="currentColor" opacity="0.3"/></svg>';
+
+  acItems.forEach((item, i) => {
+    const el = document.createElement('div');
+    el.className = 'ac-item' + (i === acIndex ? ' selected' : '');
+    el.setAttribute('role', 'option');
+    el.innerHTML = `
+      ${item.type === 'bookmark' ? bookmarkIcon : historyIcon}
+      <div class="ac-item-text">
+        <div class="ac-item-title">${acHighlight(item.title, query)}</div>
+        <div class="ac-item-url">${acHighlight(item.url, query)}</div>
+      </div>`;
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      navigate(item.url);
+      urlBar.blur();
+    });
+    el.addEventListener('mouseenter', () => {
+      acIndex = i;
+      acDropdown.querySelectorAll('.ac-item').forEach((el, j) => el.classList.toggle('selected', j === i));
+    });
+    acDropdown.appendChild(el);
+  });
+
+  acDropdown.classList.add('visible');
+  urlBarContainer.classList.add('ac-open');
+}
+
+function acHide() {
+  acDropdown.classList.remove('visible');
+  urlBarContainer.classList.remove('ac-open');
+  acDropdown.innerHTML = '';
+  acItems = [];
+  acIndex = -1;
+}
+
+function acScrollToSelected() {
+  const selected = acDropdown.querySelector('.ac-item.selected');
+  if (selected) selected.scrollIntoView({ block: 'nearest' });
+}
+
+urlBar.addEventListener('input', () => {
+  clearTimeout(acDebounce);
+  const query = urlBar.value.trim();
+  if (!query) { acHide(); return; }
+  acDebounce = setTimeout(async () => {
+    acItems = await acFetch(query);
+    acIndex = -1;
+    acRender(query);
+  }, 150);
+});
+
 urlBar.addEventListener('keydown', (e) => {
+  if (acItems.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      acIndex = Math.min(acIndex + 1, acItems.length - 1);
+      acRender(urlBar.value.trim());
+      acScrollToSelected();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      acIndex = Math.max(acIndex - 1, -1);
+      acRender(urlBar.value.trim());
+      acScrollToSelected();
+      return;
+    }
+    if (e.key === 'Escape') {
+      acHide();
+      return;
+    }
+  }
   if (e.key === 'Enter') {
-    navigate(urlBar.value);
+    const value = (acIndex >= 0 && acItems[acIndex]) ? acItems[acIndex].url : urlBar.value;
+    acHide();
+    navigate(value);
     urlBar.blur();
   }
 });
 
 urlBar.addEventListener('focus', () => urlBar.select());
+urlBar.addEventListener('blur', () => { setTimeout(acHide, 100); });
 
 ntpSearchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
