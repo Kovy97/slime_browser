@@ -483,8 +483,25 @@ app.whenReady().then(async () => {
 
     // Set Chrome user-agent so Google/YouTube trust the browser
     const chromeVersion = process.versions.chrome;
+    const chromeMajor = chromeVersion.split('.')[0];
     const chromeUA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
     webviewSession.setUserAgent(chromeUA);
+
+    // Override Sec-CH-UA headers — Electron sends "Chromium" brand which Google rejects
+    // Real Chrome sends "Google Chrome" brand, so we replace it in all outgoing requests
+    webviewSession.webRequest.onBeforeSendHeaders((details, callback) => {
+      const headers = { ...details.requestHeaders };
+      if (headers['Sec-CH-UA'] || headers['sec-ch-ua']) {
+        const key = headers['Sec-CH-UA'] ? 'Sec-CH-UA' : 'sec-ch-ua';
+        headers[key] = `"Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}", "Not_A Brand";v="24"`;
+      }
+      // Remove Electron from Sec-CH-UA-Full-Version-List if present
+      const fvKey = Object.keys(headers).find(k => k.toLowerCase() === 'sec-ch-ua-full-version-list');
+      if (fvKey) {
+        headers[fvKey] = `"Google Chrome";v="${chromeVersion}", "Chromium";v="${chromeVersion}", "Not_A Brand";v="24.0.0.0"`;
+      }
+      callback({ requestHeaders: headers });
+    });
 
     // HTTP Basic/Digest Auth popup
     app.on('login', (event, webContents, details, authInfo, callback) => {

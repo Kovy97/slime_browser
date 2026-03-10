@@ -100,7 +100,43 @@
       try { delete window.require; } catch(e) {}
     }
 
-    // 8. Clean Electron/SlimeBrowser from User-Agent if leaked
+    // 8. Spoof navigator.userAgentData (Google checks this for login)
+    // Electron reports "Chromium" brand — Google requires "Google Chrome"
+    const chromeMajor = /Chrome\/([\d]+)/.exec(navigator.userAgent)?.[1] || '130';
+    const chromeFullVer = /Chrome\/([\d.]+)/.exec(navigator.userAgent)?.[1] || '130.0.0.0';
+    const fakeUAData = {
+      brands: [
+        { brand: 'Google Chrome', version: chromeMajor },
+        { brand: 'Chromium', version: chromeMajor },
+        { brand: 'Not_A Brand', version: '24' },
+      ],
+      mobile: false,
+      platform: 'Windows',
+      getHighEntropyValues: (hints) => Promise.resolve({
+        brands: fakeUAData.brands,
+        mobile: false,
+        platform: 'Windows',
+        platformVersion: '15.0.0',
+        architecture: 'x86',
+        bitness: '64',
+        model: '',
+        uaFullVersion: chromeFullVer,
+        fullVersionList: [
+          { brand: 'Google Chrome', version: chromeFullVer },
+          { brand: 'Chromium', version: chromeFullVer },
+          { brand: 'Not_A Brand', version: '24.0.0.0' },
+        ],
+      }),
+      toJSON: function() {
+        return { brands: this.brands, mobile: this.mobile, platform: this.platform };
+      },
+    };
+    Object.defineProperty(navigator, 'userAgentData', {
+      get: () => fakeUAData,
+      configurable: true,
+    });
+
+    // 9. Clean Electron/SlimeBrowser from User-Agent if leaked
     const cleanUA = navigator.userAgent
       .replace(/\s*Electron\/[\d.]+/g, '')
       .replace(/\s*SlimeBrowser\/[\d.]+/g, '');
