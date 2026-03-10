@@ -127,4 +127,15 @@ contextBridge.exposeInMainWorld('slime', {
     ipcRenderer.on('open-url', handler);
     return () => ipcRenderer.removeListener('open-url', handler);
   },
+
+  // Google Login popup (real BrowserWindow to bypass embedded webview block)
+  openGoogleLogin: (url) => {
+    if (typeof url !== 'string') return Promise.reject('Invalid URL');
+    return ipcRenderer.invoke('open-google-login', url);
+  },
+  onGoogleLoginComplete: (callback) => {
+    const handler = (_, url) => callback(url);
+    ipcRenderer.on('google-login-complete', handler);
+    return () => ipcRenderer.removeListener('google-login-complete', handler);
+  },
 });

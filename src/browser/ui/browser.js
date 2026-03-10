@@ -380,6 +380,19 @@ function createWebview(tabId, url) {
   webview.addEventListener('page-title-updated', _listeners.titleUpdated);
 
   _listeners.didNavigate = (e) => {
+    // Intercept Google sign-in — open in real BrowserWindow popup
+    // Google blocks login from embedded webviews, so we redirect to a popup
+    try {
+      const host = new URL(e.url).hostname;
+      if ((host === 'accounts.google.com' || host === 'accounts.youtube.com') &&
+          e.url.includes('/signin') || e.url.includes('/ServiceLogin') || e.url.includes('/o/oauth2')) {
+        window.slime.openGoogleLogin(e.url);
+        // Navigate webview back so it doesn't show the blocked page
+        if (webview.canGoBack()) webview.goBack();
+        return;
+      }
+    } catch (err) {}
+
     updateTabUrl(tabId, e.url);
     updateTabFavicon(tabId, e.url);
     updateNavButtons();
@@ -2435,6 +2448,14 @@ async function init() {
   // Handle URLs opened from external apps (default browser)
   window.slime.onOpenUrl((url) => {
     createTab(url);
+  });
+
+  // After Google login popup closes, reload the active webview to apply cookies
+  window.slime.onGoogleLoginComplete((url) => {
+    const tab = tabMap.get(activeTabId);
+    if (tab?.webview) {
+      tab.webview.reload();
+    }
   });
 }
 
