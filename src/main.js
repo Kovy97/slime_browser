@@ -406,6 +406,7 @@ app.whenReady().then(async () => {
   // ==========================================
   setTimeout(() => checkForAsarUpdate(), 3000);
   ipcMain.handle('check-for-updates', () => checkForAsarUpdate());
+});
 
 // ==========================================
 // Asar Hot-Update Functions
