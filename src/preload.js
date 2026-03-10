@@ -105,6 +105,22 @@ contextBridge.exposeInMainWorld('slime', {
     },
   },
 
+  // HTTP Auth
+  onAuthRequest: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on('auth-request', handler);
+    return () => ipcRenderer.removeListener('auth-request', handler);
+  },
+  authRespond: (response) => ipcRenderer.send('auth-response', response),
+
+  // Context menu
+  showContextMenu: (params) => ipcRenderer.send('show-context-menu', params),
+  onContextAction: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on('context-action', handler);
+    return () => ipcRenderer.removeListener('context-action', handler);
+  },
+
   // Open URL from external source (default browser)
   onOpenUrl: (callback) => {
     const handler = (_, url) => callback(url);

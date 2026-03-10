@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const originalFs = require('original-fs');
@@ -381,6 +381,68 @@ ipcMain.on('window-maximize', () => {
 });
 ipcMain.on('window-close', () => mainWindow?.close());
 
+// Context menu for webviews
+ipcMain.on('show-context-menu', (_, params) => {
+  const { x, y, linkURL, srcURL, pageURL, selectionText, isEditable, mediaType } = params || {};
+
+  const template = [];
+
+  // Link options
+  if (linkURL) {
+    template.push(
+      { label: 'Open Link in New Tab', click: () => mainWindow?.webContents.send('context-action', { action: 'open-link-new-tab', url: linkURL }) },
+      { label: 'Copy Link Address', click: () => clipboard.writeText(linkURL) },
+      { type: 'separator' }
+    );
+  }
+
+  // Image options
+  if (mediaType === 'image' && srcURL) {
+    template.push(
+      { label: 'Open Image in New Tab', click: () => mainWindow?.webContents.send('context-action', { action: 'open-link-new-tab', url: srcURL }) },
+      { label: 'Copy Image Address', click: () => clipboard.writeText(srcURL) },
+      { type: 'separator' }
+    );
+  }
+
+  // Text selection
+  if (selectionText) {
+    template.push(
+      { label: 'Copy', click: () => mainWindow?.webContents.send('context-action', { action: 'copy' }) },
+      { label: `Search "${selectionText.substring(0, 30)}${selectionText.length > 30 ? '...' : ''}"`, click: () => mainWindow?.webContents.send('context-action', { action: 'search', text: selectionText }) },
+      { type: 'separator' }
+    );
+  }
+
+  // Editable field options
+  if (isEditable) {
+    template.push(
+      { label: 'Cut', click: () => mainWindow?.webContents.send('context-action', { action: 'cut' }) },
+      { label: 'Copy', click: () => mainWindow?.webContents.send('context-action', { action: 'copy' }) },
+      { label: 'Paste', click: () => mainWindow?.webContents.send('context-action', { action: 'paste' }) },
+      { label: 'Select All', click: () => mainWindow?.webContents.send('context-action', { action: 'select-all' }) },
+      { type: 'separator' }
+    );
+  }
+
+  // Navigation
+  template.push(
+    { label: 'Back', click: () => mainWindow?.webContents.send('context-action', { action: 'back' }) },
+    { label: 'Forward', click: () => mainWindow?.webContents.send('context-action', { action: 'forward' }) },
+    { label: 'Reload', click: () => mainWindow?.webContents.send('context-action', { action: 'reload' }) },
+    { type: 'separator' }
+  );
+
+  // Developer tools
+  template.push(
+    { label: 'Inspect Element', click: () => mainWindow?.webContents.send('context-action', { action: 'inspect', x, y }) },
+    { label: 'Open DevTools', click: () => mainWindow?.webContents.send('context-action', { action: 'devtools' }) }
+  );
+
+  const menu = Menu.buildFromTemplate(template);
+  menu.popup({ window: mainWindow });
+});
+
 // Adblocker stats
 let blockedCount = 0;
 ipcMain.handle('get-blocked-count', () => blockedCount);
@@ -420,6 +482,25 @@ app.whenReady().then(async () => {
     const chromeVersion = process.versions.chrome;
     const chromeUA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
     webviewSession.setUserAgent(chromeUA);
+
+    // HTTP Basic/Digest Auth popup
+    app.on('login', (event, webContents, details, authInfo, callback) => {
+      event.preventDefault();
+      if (!mainWindow) return callback();
+      mainWindow.webContents.send('auth-request', {
+        url: details.url,
+        host: authInfo.host,
+        realm: authInfo.realm,
+        scheme: authInfo.scheme,
+      });
+      ipcMain.once('auth-response', (_, response) => {
+        if (response && response.username) {
+          callback(response.username, response.password);
+        } else {
+          callback();
+        }
+      });
+    });
 
     await setupAdblocker(webviewSession, (count) => {
       blockedCount += count;

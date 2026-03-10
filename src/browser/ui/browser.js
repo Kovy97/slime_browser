@@ -29,6 +29,59 @@ window.slime.getYouTubeScript().then(script => {
   youtubeScript = script;
 });
 
+// HTTP Basic Auth dialog
+const authDialog = document.getElementById('auth-dialog');
+const authUsername = document.getElementById('auth-username');
+const authPassword = document.getElementById('auth-password');
+const authSubmit = document.getElementById('auth-submit');
+const authCancel = document.getElementById('auth-cancel');
+const authMessage = document.getElementById('auth-message');
+
+window.slime.onAuthRequest((data) => {
+  authMessage.textContent = `${data.host} requires authentication${data.realm ? ' (' + data.realm + ')' : ''}`;
+  authUsername.value = '';
+  authPassword.value = '';
+  authDialog.style.display = 'flex';
+  authUsername.focus();
+});
+
+function submitAuth() {
+  window.slime.authRespond({ username: authUsername.value, password: authPassword.value });
+  authDialog.style.display = 'none';
+}
+
+function cancelAuth() {
+  window.slime.authRespond(null);
+  authDialog.style.display = 'none';
+}
+
+authSubmit.addEventListener('click', submitAuth);
+authCancel.addEventListener('click', cancelAuth);
+authPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
+authUsername.addEventListener('keydown', (e) => { if (e.key === 'Enter') authPassword.focus(); });
+authDialog.addEventListener('keydown', (e) => { if (e.key === 'Escape') cancelAuth(); });
+
+// Handle context menu actions from main process
+window.slime.onContextAction((data) => {
+  const tab = tabMap.get(activeTabId);
+  if (!tab || !tab.webview) return;
+  const wv = tab.webview;
+
+  switch (data.action) {
+    case 'open-link-new-tab': createTab(data.url); break;
+    case 'search': navigate(SEARCH_ENGINE + encodeURIComponent(data.text), true); break;
+    case 'copy': wv.copy(); break;
+    case 'cut': wv.cut(); break;
+    case 'paste': wv.paste(); break;
+    case 'select-all': wv.selectAll(); break;
+    case 'back': wv.canGoBack() && wv.goBack(); break;
+    case 'forward': wv.canGoForward() && wv.goForward(); break;
+    case 'reload': wv.reload(); break;
+    case 'devtools': wv.openDevTools(); break;
+    case 'inspect': wv.inspectElement(data.x, data.y); break;
+  }
+});
+
 // ==========================================
 // DOM References
 // ==========================================
@@ -90,6 +143,7 @@ function closeTab(id) {
     tab.webview.removeEventListener('new-window', tab._listeners?.newWindow);
     tab.webview.removeEventListener('media-started-playing', tab._listeners?.mediaStarted);
     tab.webview.removeEventListener('media-paused', tab._listeners?.mediaPaused);
+    tab.webview.removeEventListener('context-menu', tab._listeners?.contextMenu);
     tab.webview.remove();
   }
 
@@ -344,6 +398,22 @@ function createWebview(tabId, url) {
     if (tabEl) tabEl.classList.remove('audible');
   };
   webview.addEventListener('media-paused', _listeners.mediaPaused);
+
+  // Context menu (right-click)
+  _listeners.contextMenu = (e) => {
+    e.preventDefault();
+    window.slime.showContextMenu({
+      x: e.params.x,
+      y: e.params.y,
+      linkURL: e.params.linkURL || '',
+      srcURL: e.params.srcURL || '',
+      pageURL: e.params.pageURL || '',
+      selectionText: e.params.selectionText || '',
+      isEditable: e.params.isEditable || false,
+      mediaType: e.params.mediaType || '',
+    });
+  };
+  webview.addEventListener('context-menu', _listeners.contextMenu);
 
   // Handle webview crashes and load failures
   webview.addEventListener('crashed', () => {

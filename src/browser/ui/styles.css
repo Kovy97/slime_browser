@@ -812,16 +812,16 @@ body.sidebar-pinned #main {
 #window-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 5px;
+  padding: 0 10px;
   height: 100%;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
 }
 
 .traffic-btn {
-  width: 14px;
-  height: 14px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   border: none;
   cursor: pointer;
@@ -830,7 +830,7 @@ body.sidebar-pinned #main {
   justify-content: center;
   transition: filter var(--transition);
   color: transparent;
-  padding: 4px;
+  padding: 3px;
   box-sizing: content-box;
   position: relative;
 }
@@ -844,6 +844,94 @@ body.sidebar-pinned #main {
 
 #window-controls:hover .traffic-btn { color: rgba(0,0,0,0.5); }
 .traffic-btn svg { pointer-events: none; }
+
+/* ==========================================
+   Auth / Modal Dialog
+   ========================================== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+}
+
+.modal-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  padding: 24px;
+  min-width: 320px;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.modal-input {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  font-family: inherit;
+}
+
+.modal-input:focus {
+  border-color: var(--accent-medium);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.modal-btn {
+  padding: 6px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition);
+}
+
+.modal-btn:hover {
+  background: var(--bg-base);
+}
+
+.modal-btn-primary {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.modal-btn-primary:hover {
+  filter: brightness(1.1);
+  background: var(--accent);
+}
 
 /* ==========================================
    Webview Container

@@ -210,6 +210,20 @@
       </div>
     </div>
 
+    <!-- HTTP Auth Dialog -->
+    <div id="auth-dialog" class="modal-overlay" style="display:none">
+      <div class="modal-box">
+        <div class="modal-title">Authentication Required</div>
+        <div id="auth-message" class="modal-subtitle"></div>
+        <input type="text" id="auth-username" class="modal-input" placeholder="Username" autocomplete="off">
+        <input type="password" id="auth-password" class="modal-input" placeholder="Password">
+        <div class="modal-actions">
+          <button id="auth-cancel" class="modal-btn">Cancel</button>
+          <button id="auth-submit" class="modal-btn modal-btn-primary">Sign In</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Webview Container -->
     <div id="webview-container"></div>
 
