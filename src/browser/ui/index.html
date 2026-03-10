@@ -11,7 +11,7 @@
   <div id="sidebar">
     <!-- Sidebar Header -->
     <div id="sidebar-header">
-      <div class="logo-icon">S</div>
+      <div class="logo-icon"><img src="../../../Slime1.ico" alt="S" width="20" height="20"></div>
       <span class="logo-text">Slime</span>
       <button id="btn-pin-sidebar" class="sidebar-pin-btn" title="Pin sidebar">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14.5 6.5L10 11L8.5 9.5L5.5 12.5L3.5 12.5L3.5 10.5L6.5 7.5L5 6L9.5 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/></svg>
@@ -39,15 +39,19 @@
       </div>
     </div>
 
+    <!-- New Tab Button -->
+    <div id="new-tab-area">
+      <button id="new-tab-btn" class="sidebar-btn" title="New Tab (Ctrl+T)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span class="sidebar-btn-label">New Tab</span>
+      </button>
+    </div>
+
     <!-- Vertical Tabs -->
     <div id="tabs-container"></div>
 
     <!-- Sidebar Footer -->
     <div id="sidebar-footer">
-      <button id="new-tab-btn" class="sidebar-btn" title="New Tab (Ctrl+T)">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span class="sidebar-btn-label">New Tab</span>
-      </button>
       <button class="sidebar-btn" id="btn-bookmarks-panel" title="Bookmarks">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 2h8a1 1 0 0 1 1 1v11.5l-5-3-5 3V3a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
         <span class="sidebar-btn-label">Bookmarks</span>
@@ -65,6 +69,10 @@
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4v4.5c0 3.5 2.5 5.5 6 6.5 3.5-1 6-3 6-6.5V4L8 1.5z" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
         <span id="blocked-count">0</span>
       </div>
+      <button class="sidebar-btn" id="btn-passwords" title="Passwords">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="11" r="1" fill="currentColor"/></svg>
+        <span class="sidebar-btn-label">Passwords</span>
+      </button>
       <button class="sidebar-btn" id="btn-settings" title="Settings">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.9 2.9l1.4 1.4M11.7 11.7l1.4 1.4M13.1 2.9l-1.4 1.4M4.3 11.7l-1.4 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
         <span class="sidebar-btn-label">Settings</span>
@@ -110,6 +118,20 @@
       </div>
     </div>
     <div id="downloads-list" class="panel-list"></div>
+  </div>
+
+  <!-- Passwords Panel -->
+  <div id="passwords-panel" class="panel-overlay" style="display:none;">
+    <div class="panel-header">
+      <h3>Saved Passwords</h3>
+      <div class="panel-actions">
+        <button class="panel-close-btn" id="passwords-close">&times;</button>
+      </div>
+    </div>
+    <div class="panel-search">
+      <input type="text" id="passwords-search" placeholder="Search passwords..." spellcheck="false">
+    </div>
+    <div id="passwords-list" class="panel-list"></div>
   </div>
 
   <!-- Password Save Bar -->

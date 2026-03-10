@@ -44,10 +44,13 @@ body {
 
 /* ==========================================
    Sidebar (Vertical Tabs + URL Bar)
+   Collapsed: 52px wide, shows only centered icons
+   Expanded: 260px wide on hover/focus/pin
+   Uses clip-path for clean clipping + internal layout stays at 260px
    ========================================== */
 
 #sidebar {
-  width: var(--sidebar-width);
+  width: var(--sidebar-expanded);
   height: 100vh;
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
@@ -59,13 +62,15 @@ body {
   position: absolute;
   left: 0;
   top: 0;
-  transition: width 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+  clip-path: inset(0 calc(var(--sidebar-expanded) - var(--sidebar-width)) 0 0);
+  transition: clip-path 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+  will-change: clip-path;
 }
 
 #sidebar:hover,
 #sidebar:focus-within,
 #sidebar.pinned {
-  width: var(--sidebar-expanded);
+  clip-path: inset(0 0 0 0);
 }
 
 #sidebar.pinned {
@@ -76,7 +81,7 @@ body.sidebar-pinned #main {
   margin-left: 0;
 }
 
-/* Sidebar Header */
+/* --- Sidebar Header --- */
 #sidebar-header {
   height: 48px;
   display: flex;
@@ -89,15 +94,18 @@ body.sidebar-pinned #main {
 .logo-icon {
   width: 26px;
   height: 26px;
-  background: var(--accent);
-  color: var(--bg-base);
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 800;
-  font-size: 14px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.logo-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .logo-text {
@@ -110,9 +118,16 @@ body.sidebar-pinned #main {
   transition: opacity var(--transition);
 }
 
+#sidebar:hover .logo-text,
+#sidebar:focus-within .logo-text,
+#sidebar.pinned .logo-text {
+  opacity: 1;
+}
+
 .sidebar-pin-btn {
   width: 26px;
   height: 26px;
+  opacity: 0;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -122,8 +137,7 @@ body.sidebar-pinned #main {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  opacity: 0;
-  transition: all var(--transition);
+  transition: opacity var(--transition), background var(--transition), color var(--transition), transform var(--transition);
   transform: rotate(-45deg);
 }
 
@@ -143,30 +157,16 @@ body.sidebar-pinned #main {
   transform: rotate(0deg);
 }
 
-#sidebar:hover .logo-text,
-#sidebar:focus-within .logo-text,
-#sidebar.pinned .logo-text {
-  opacity: 1;
-}
-
-/* Sidebar Navigation (URL bar + nav buttons) */
+/* --- Sidebar Navigation (URL bar + nav buttons) --- */
 #sidebar-nav {
   padding: 0 8px 8px;
   flex-shrink: 0;
-  overflow: hidden;
 }
 
 #nav-buttons {
   display: flex;
   gap: 2px;
   margin-bottom: 6px;
-  justify-content: center;
-}
-
-#sidebar:hover #nav-buttons,
-#sidebar:focus-within #nav-buttons,
-#sidebar.pinned #nav-buttons {
-  justify-content: flex-start;
 }
 
 .nav-btn {
@@ -180,7 +180,7 @@ body.sidebar-pinned #main {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
   flex-shrink: 0;
 }
 
@@ -203,22 +203,19 @@ body.sidebar-pinned #main {
   border-radius: var(--radius-sm);
   padding: 0 4px 0 10px;
   height: 32px;
-  transition: border-color 0.2s, opacity 0.2s, height 0.2s;
   opacity: 0;
-  height: 0;
-  padding: 0;
-  border: none;
-  margin: 0;
+  max-height: 0;
   overflow: hidden;
+  border-color: transparent;
+  transition: opacity var(--transition), max-height var(--transition), border-color var(--transition), background var(--transition);
 }
 
 #sidebar:hover #url-bar-container,
 #sidebar:focus-within #url-bar-container,
 #sidebar.pinned #url-bar-container {
   opacity: 1;
-  height: 32px;
-  padding: 0 4px 0 10px;
-  border: 1px solid var(--border);
+  max-height: 32px;
+  border-color: var(--border);
 }
 
 #url-bar-container:focus-within {
@@ -254,7 +251,7 @@ body.sidebar-pinned #main {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: all var(--transition);
+  transition: color var(--transition), background var(--transition);
 }
 
 .url-action-btn:hover {
@@ -271,7 +268,14 @@ body.sidebar-pinned #main {
   stroke: var(--accent);
 }
 
-/* Vertical Tabs */
+/* --- New Tab Button Area --- */
+#new-tab-area {
+  padding: 4px 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* --- Vertical Tabs --- */
 #tabs-container {
   flex: 1;
   overflow-y: auto;
@@ -300,25 +304,16 @@ body.sidebar-pinned #main {
 .tab {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 0;
-  padding: 8px 0;
+  gap: 10px;
+  padding: 8px 10px;
   height: 36px;
   background: transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background var(--transition);
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
-}
-
-#sidebar:hover .tab,
-#sidebar:focus-within .tab,
-#sidebar.pinned .tab {
-  justify-content: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
 }
 
 .tab:hover {
@@ -326,19 +321,26 @@ body.sidebar-pinned #main {
 }
 
 .tab.active {
-  background: var(--accent-soft);
+  background: transparent;
 }
 
-.tab.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 16px;
-  background: var(--accent);
-  border-radius: 0 3px 3px 0;
+.tab.active .tab-favicon {
+  background: var(--accent-medium);
+  box-shadow: 0 0 0 3px var(--accent-medium);
+  border-radius: 6px;
+}
+
+#sidebar:hover .tab.active,
+#sidebar:focus-within .tab.active,
+#sidebar.pinned .tab.active {
+  background: var(--accent-medium);
+}
+
+#sidebar:hover .tab.active .tab-favicon,
+#sidebar:focus-within .tab.active .tab-favicon,
+#sidebar.pinned .tab.active .tab-favicon {
+  background: var(--bg-elevated);
+  box-shadow: none;
 }
 
 .tab-favicon {
@@ -397,7 +399,7 @@ body.sidebar-pinned #main {
   justify-content: center;
   flex-shrink: 0;
   opacity: 0;
-  transition: all 0.15s;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
 
 #sidebar:hover .tab:hover .tab-close,
@@ -412,7 +414,7 @@ body.sidebar-pinned #main {
   opacity: 1 !important;
 }
 
-/* Sidebar Footer */
+/* --- Sidebar Footer --- */
 #sidebar-footer {
   padding: 8px;
   border-top: 1px solid var(--border);
@@ -432,9 +434,8 @@ body.sidebar-pinned #main {
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 10px;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
   padding: 0 10px;
   position: relative;
 }
@@ -457,16 +458,9 @@ body.sidebar-pinned #main {
   opacity: 1;
 }
 
-#sidebar:hover .sidebar-btn,
-#sidebar:focus-within .sidebar-btn,
-#sidebar.pinned .sidebar-btn {
-  justify-content: flex-start;
-}
-
 #blocked-counter {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
   height: 34px;
   padding: 0 10px;
@@ -486,12 +480,6 @@ body.sidebar-pinned #main {
 #sidebar:focus-within #blocked-counter #blocked-count,
 #sidebar.pinned #blocked-counter #blocked-count {
   opacity: 1;
-}
-
-#sidebar:hover #blocked-counter,
-#sidebar:focus-within #blocked-counter,
-#sidebar.pinned #blocked-counter {
-  justify-content: flex-start;
 }
 
 /* Download badge */
@@ -567,7 +555,7 @@ body.sidebar-pinned #main {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .win-btn:hover {
@@ -668,7 +656,7 @@ body.sidebar-pinned #main {
   font-size: 14px;
   font-family: inherit;
   outline: none;
-  transition: all var(--transition);
+  transition: border-color var(--transition), background var(--transition);
 }
 
 .ntp-search input:focus {
@@ -697,7 +685,7 @@ body.sidebar-pinned #main {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background var(--transition), border-color var(--transition), transform var(--transition);
   text-decoration: none;
   min-width: 88px;
 }
@@ -746,6 +734,17 @@ body.sidebar-pinned #main {
   display: flex;
   flex-direction: column;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+  will-change: clip-path;
+}
+
+#sidebar:hover ~ .panel-overlay,
+#sidebar:focus-within ~ .panel-overlay,
+#sidebar.pinned ~ .panel-overlay,
+.panel-overlay:hover,
+.panel-overlay:focus-within {
+  clip-path: inset(0 0 0 0);
 }
 
 .panel-header {
@@ -777,7 +776,7 @@ body.sidebar-pinned #main {
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
 
 .panel-action-btn:hover {
@@ -797,7 +796,7 @@ body.sidebar-pinned #main {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
 
 .panel-close-btn:hover {
@@ -914,7 +913,7 @@ body.sidebar-pinned #main {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: all 0.15s;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
   flex-shrink: 0;
   font-size: 14px;
 }
@@ -926,6 +925,31 @@ body.sidebar-pinned #main {
 .panel-item-delete:hover {
   background: var(--danger);
   color: white;
+}
+
+.panel-item-copy {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.panel-item:hover .panel-item-copy {
+  opacity: 1;
+}
+
+.panel-item-copy:hover {
+  background: var(--bg-active);
+  color: var(--accent);
 }
 
 .panel-empty {
@@ -1014,7 +1038,7 @@ body.sidebar-pinned #main {
   cursor: pointer;
   padding: 3px 8px;
   border-radius: 4px;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
 
 .download-action-btn:hover {
@@ -1043,16 +1067,17 @@ body.sidebar-pinned #main {
   top: var(--titlebar-height);
   left: var(--sidebar-width);
   right: 0;
-  height: 40px;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
+  height: 44px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--accent-medium);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 16px;
   z-index: 80;
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: 13px;
+  color: var(--text-primary);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
 .password-bar-actions {
@@ -1062,12 +1087,13 @@ body.sidebar-pinned #main {
 
 .password-bar-btn {
   border: none;
-  padding: 4px 14px;
-  border-radius: 4px;
-  font-size: 11px;
+  padding: 6px 18px;
+  border-radius: 6px;
+  font-size: 12px;
   cursor: pointer;
   font-family: inherit;
-  transition: all var(--transition);
+  font-weight: 500;
+  transition: background var(--transition), color var(--transition), filter var(--transition);
 }
 
 .password-bar-btn.save {
@@ -1244,7 +1270,7 @@ body.sidebar-pinned #main {
   bottom: 0;
   background: var(--bg-hover);
   border-radius: 11px;
-  transition: all 0.25s;
+  transition: background 0.25s;
 }
 
 .settings-toggle-slider::before {
@@ -1256,7 +1282,7 @@ body.sidebar-pinned #main {
   bottom: 3px;
   background: var(--text-muted);
   border-radius: 50%;
-  transition: all 0.25s;
+  transition: transform 0.25s, background 0.25s;
 }
 
 .settings-toggle input:checked + .settings-toggle-slider {

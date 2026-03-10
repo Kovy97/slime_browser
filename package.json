@@ -5,11 +5,35 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win"
   },
   "author": "MaSc",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.slime.browser",
+    "productName": "Slime Browser",
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "Slime1.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "Slime1.ico",
+      "uninstallerIcon": "Slime1.ico",
+      "shortcutName": "Slime Browser"
+    },
+    "files": [
+      "src/**/*",
+      "Slime1.ico"
+    ]
   }
 }

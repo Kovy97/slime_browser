@@ -4,30 +4,55 @@ const fs = require('fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
 
+// Chromium performance flags (must be set before app.whenReady)
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('disable-component-update');
+
 let mainWindow;
 
 // ==========================================
-// Data Paths & Storage Helpers
+// Data Paths & Storage Helpers (with in-memory cache)
 // ==========================================
+
+const jsonCache = new Map();
 
 function dataPath(filename) {
   return path.join(app.getPath('userData'), filename);
 }
 
 function readJSON(filename, fallback) {
+  if (jsonCache.has(filename)) {
+    return jsonCache.get(filename);
+  }
   try {
-    return JSON.parse(fs.readFileSync(dataPath(filename), 'utf-8'));
+    const data = JSON.parse(fs.readFileSync(dataPath(filename), 'utf-8'));
+    jsonCache.set(filename, data);
+    return data;
   } catch (e) {
-    return typeof fallback === 'function' ? fallback() : fallback;
+    const result = typeof fallback === 'function' ? fallback() : fallback;
+    return result;
   }
 }
 
 function writeJSON(filename, data) {
-  try {
-    fs.writeFileSync(dataPath(filename), JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error(`[Slime] Failed to write ${filename}:`, e);
-  }
+  jsonCache.set(filename, data);
+  fs.writeFile(dataPath(filename), JSON.stringify(data, null, 2), (err) => {
+    if (err) console.error(`[Slime] Failed to write ${filename}:`, err);
+  });
+}
+
+// ==========================================
+// Debounce utility
+// ==========================================
+
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
 }
 
 // ==========================================
@@ -51,14 +76,18 @@ function loadSettings() {
 ipcMain.handle('settings-get', () => loadSettings());
 ipcMain.handle('settings-save', (_, settings) => {
   writeJSON('settings.json', settings);
-  return loadSettings();
+  return { ...DEFAULT_SETTINGS, ...settings };
 });
 
 // ==========================================
-// Session Restore
+// Session Restore (debounced save)
 // ==========================================
 
-ipcMain.on('save-session', (_, tabsData) => writeJSON('session.json', tabsData));
+const debouncedSaveSession = debounce((tabsData) => {
+  writeJSON('session.json', tabsData);
+}, 500);
+
+ipcMain.on('save-session', (_, tabsData) => debouncedSaveSession(tabsData));
 ipcMain.handle('load-session', () => readJSON('session.json', []));
 
 // ==========================================
@@ -156,6 +185,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     frame: false,
+    show: false,
     icon: path.join(__dirname, '..', 'Slime1.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -167,6 +197,8 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'browser', 'ui', 'index.html'));
   Menu.setApplicationMenu(null);
+
+  mainWindow.once('ready-to-show', () => mainWindow.show());
 
   mainWindow.on('maximize', () => {
     mainWindow.webContents.send('window-state', 'maximized');
@@ -209,6 +241,12 @@ ipcMain.handle('download-show', (_, filePath) => shell.showItemInFolder(filePath
 
 app.whenReady().then(async () => {
   const webviewSession = session.fromPartition('persist:slime');
+
+  // Set Chrome user-agent so Google/YouTube trust the browser
+  const chromeVersion = process.versions.chrome;
+  const chromeUA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+  webviewSession.setUserAgent(chromeUA);
+
   await setupAdblocker(webviewSession, (count) => {
     blockedCount += count;
     mainWindow?.webContents.send('blocked-count-updated', blockedCount);
@@ -217,6 +255,18 @@ app.whenReady().then(async () => {
   // Download manager
   const downloads = new Map();
   let downloadIdCounter = 0;
+
+  // Cleanup completed/failed downloads after 1 hour
+  const DOWNLOAD_TTL = 60 * 60 * 1000;
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, dl] of downloads) {
+      if ((dl.state === 'completed' || dl.state === 'failed') &&
+          (now - dl.startTime) >= DOWNLOAD_TTL) {
+        downloads.delete(id);
+      }
+    }
+  }, 5 * 60 * 1000);
 
   webviewSession.on('will-download', (event, item) => {
     const id = ++downloadIdCounter;

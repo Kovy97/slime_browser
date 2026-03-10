@@ -8,6 +8,7 @@
 // ==========================================
 
 const tabs = [];
+const tabMap = new Map();
 let activeTabId = null;
 let tabIdCounter = 0;
 let youtubeScript = null;
@@ -62,6 +63,7 @@ function createTab(url = DEFAULT_URL) {
   }
 
   tabs.push(tab);
+  tabMap.set(id, tab);
   renderTab(tab);
   switchToTab(id);
 
@@ -82,6 +84,7 @@ function closeTab(id) {
   if (tabEl) tabEl.remove();
 
   tabs.splice(index, 1);
+  tabMap.delete(id);
 
   if (tabs.length === 0) {
     createTab();
@@ -99,7 +102,7 @@ function switchToTab(id) {
   const tabEl = document.querySelector(`[data-tab-id="${id}"]`);
   if (tabEl) tabEl.classList.add('active');
 
-  const tab = tabs.find(t => t.id === id);
+  const tab = tabMap.get(id);
   if (!tab) return;
 
   document.querySelectorAll('webview').forEach(wv => wv.classList.remove('active'));
@@ -145,7 +148,7 @@ function renderTab(tab) {
 }
 
 function updateTabTitle(id, title) {
-  const tab = tabs.find(t => t.id === id);
+  const tab = tabMap.get(id);
   if (!tab) return;
 
   tab.title = title || 'Untitled';
@@ -184,7 +187,7 @@ function updateTabFavicon(id, url) {
 }
 
 function updateTabUrl(id, url) {
-  const tab = tabs.find(t => t.id === id);
+  const tab = tabMap.get(id);
   if (!tab) return;
 
   tab.url = url;
@@ -217,7 +220,7 @@ function createWebview(tabId, url) {
     updateBookmarkButton();
     injectContentScripts(webview, e.url);
     // Record in history
-    const wvTab = tabs.find(t => t.id === tabId);
+    const wvTab = tabMap.get(tabId);
     recordHistory(e.url, wvTab?.title);
   });
 
@@ -257,9 +260,11 @@ function createWebview(tabId, url) {
 
   webview.addEventListener('dom-ready', () => {
     injectContentScripts(webview, webview.getURL());
-    // Check for password autofill
     checkPasswordAutofill(webview);
   });
+
+  // Setup password capture listener
+  setupPasswordCapture(webview, tabId);
 
   // Open links in new tab instead of popup — except auth flows
   webview.addEventListener('new-window', (e) => {
@@ -323,7 +328,7 @@ function navigate(input, newTab = false) {
     return;
   }
 
-  const tab = tabs.find(t => t.id === activeTabId);
+  const tab = tabMap.get(activeTabId);
   if (!tab) return;
 
   if (tab.isNewTab) {
@@ -340,7 +345,7 @@ function navigate(input, newTab = false) {
 }
 
 function updateNavButtons() {
-  const tab = tabs.find(t => t.id === activeTabId);
+  const tab = tabMap.get(activeTabId);
   if (!tab || !tab.webview) {
     btnBack.disabled = true;
     btnForward.disabled = true;
@@ -381,6 +386,7 @@ async function loadHistoryPanel(query = '') {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   items.forEach(item => {
     const el = document.createElement('div');
     el.className = 'panel-item';
@@ -403,8 +409,9 @@ async function loadHistoryPanel(query = '') {
       navigate(item.url);
       historyPanel.style.display = 'none';
     });
-    historyList.appendChild(el);
+    fragment.appendChild(el);
   });
+  historyList.appendChild(fragment);
 }
 
 historyBtn.addEventListener('click', () => {
@@ -443,18 +450,29 @@ const bookmarksList = document.getElementById('bookmarks-list');
 const bookmarksSearch = document.getElementById('bookmarks-search');
 const bookmarksCloseBtn = document.getElementById('bookmarks-close');
 
+let _lastBookmarkCheckUrl = null;
+let _lastBookmarkCheckResult = false;
+
 async function updateBookmarkButton() {
-  const tab = tabs.find(t => t.id === activeTabId);
+  const tab = tabMap.get(activeTabId);
   if (!tab || tab.isNewTab || !tab.url) {
     bookmarkBtn.classList.remove('bookmarked');
+    _lastBookmarkCheckUrl = null;
+    return;
+  }
+  // Skip redundant IPC call if URL hasn't changed
+  if (tab.url === _lastBookmarkCheckUrl) {
+    bookmarkBtn.classList.toggle('bookmarked', _lastBookmarkCheckResult);
     return;
   }
   const isBookmarked = await window.slime.bookmarksCheck(tab.url);
+  _lastBookmarkCheckUrl = tab.url;
+  _lastBookmarkCheckResult = isBookmarked;
   bookmarkBtn.classList.toggle('bookmarked', isBookmarked);
 }
 
 bookmarkBtn.addEventListener('click', async () => {
-  const tab = tabs.find(t => t.id === activeTabId);
+  const tab = tabMap.get(activeTabId);
   if (!tab || tab.isNewTab || !tab.url) return;
 
   const isBookmarked = await window.slime.bookmarksCheck(tab.url);
@@ -463,6 +481,7 @@ bookmarkBtn.addEventListener('click', async () => {
   } else {
     await window.slime.bookmarksAdd({ url: tab.url, title: tab.title || tab.url });
   }
+  _lastBookmarkCheckUrl = null; // Invalidate cache
   updateBookmarkButton();
 });
 
@@ -484,6 +503,7 @@ async function loadBookmarksPanel(query = '') {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   bookmarks.forEach(item => {
     const el = document.createElement('div');
     el.className = 'panel-item';
@@ -508,12 +528,14 @@ async function loadBookmarksPanel(query = '') {
     el.querySelector('.panel-item-delete').addEventListener('click', async (e) => {
       e.stopPropagation();
       await window.slime.bookmarksRemove(item.url);
+      _lastBookmarkCheckUrl = null; // Invalidate cache
       loadBookmarksPanel(bookmarksSearch.value);
       updateBookmarkButton();
     });
 
-    bookmarksList.appendChild(el);
+    fragment.appendChild(el);
   });
+  bookmarksList.appendChild(fragment);
 }
 
 bookmarksPanelBtn.addEventListener('click', () => {
@@ -567,6 +589,21 @@ function renderDownloadItem(dl) {
 
   const progress = dl.totalBytes > 0 ? Math.round((dl.receivedBytes / dl.totalBytes) * 100) : 0;
   const state = dl.state || 'progressing';
+
+  // If element already exists and download is still progressing, only update progress bar and status text
+  if (!isNew && state === 'progressing') {
+    el.className = `download-item ${state}`;
+    const statusEl = el.querySelector('.download-item-status');
+    if (statusEl) {
+      statusEl.textContent = `${formatBytes(dl.receivedBytes || 0)} / ${formatBytes(dl.totalBytes || 0)} - ${progress}%`;
+    }
+    const progressBar = el.querySelector('.download-progress-bar');
+    if (progressBar) {
+      progressBar.style.width = `${progress}%`;
+    }
+    return;
+  }
+
   el.className = `download-item ${state}`;
 
   let statusText = '';
@@ -658,38 +695,152 @@ const passwordBar = document.getElementById('password-bar');
 const passwordBarText = document.getElementById('password-bar-text');
 const passwordBarSave = document.getElementById('password-bar-save');
 const passwordBarDismiss = document.getElementById('password-bar-dismiss');
+const passwordsBtn = document.getElementById('btn-passwords');
+const passwordsPanel = document.getElementById('passwords-panel');
+const passwordsList = document.getElementById('passwords-list');
+const passwordsSearch = document.getElementById('passwords-search');
+const passwordsCloseBtn = document.getElementById('passwords-close');
 let pendingPassword = null;
+let passwordBarTimeout = null;
+
+// Password capture script — injected into webviews via executeJavaScript
+const PASSWORD_CAPTURE_SCRIPT = `
+(function() {
+  if (window.__slimePasswordSetup) return;
+  window.__slimePasswordSetup = true;
+
+  function findLoginForms() {
+    const forms = document.querySelectorAll('form');
+    const results = [];
+    forms.forEach(form => {
+      const passInput = form.querySelector('input[type="password"]');
+      if (!passInput) return;
+      const userInput = form.querySelector(
+        'input[type="email"], input[name="email"], input[name="username"], ' +
+        'input[name="login"], input[name="user"], input[name="userid"], ' +
+        'input[autocomplete="username"], input[autocomplete="email"], ' +
+        'input[type="text"]'
+      );
+      if (userInput) results.push({ form, userInput, passInput });
+    });
+    return results;
+  }
+
+  function captureCredentials(userInput, passInput) {
+    const username = userInput.value.trim();
+    const password = passInput.value;
+    if (username && password) {
+      console.log('__SLIME_PW__' + JSON.stringify({
+        url: location.origin,
+        username: username,
+        password: password,
+        title: document.title
+      }));
+    }
+  }
+
+  function setup() {
+    const forms = findLoginForms();
+    forms.forEach(({ form, userInput, passInput }) => {
+      if (form.__slimePwBound) return;
+      form.__slimePwBound = true;
+
+      form.addEventListener('submit', () => captureCredentials(userInput, passInput));
+      passInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') captureCredentials(userInput, passInput);
+      });
+    });
+    // Signal that forms exist
+    if (forms.length > 0) {
+      console.log('__SLIME_PW_FORMS__' + location.origin);
+    }
+  }
+
+  setup();
+  // Re-scan periodically for SPAs
+  const obs = new MutationObserver(() => setTimeout(setup, 500));
+  obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+})();
+`;
+
+// Autofill script generator
+function makeAutofillScript(username, password) {
+  const u = JSON.stringify(username);
+  const p = JSON.stringify(password);
+  return `
+  (function() {
+    const forms = document.querySelectorAll('form');
+    forms.forEach(form => {
+      const passInput = form.querySelector('input[type="password"]');
+      if (!passInput) return;
+      const userInput = form.querySelector(
+        'input[type="email"], input[name="email"], input[name="username"], ' +
+        'input[name="login"], input[name="user"], input[name="userid"], ' +
+        'input[autocomplete="username"], input[autocomplete="email"], ' +
+        'input[type="text"]'
+      );
+      if (!userInput) return;
+
+      function setVal(el, val) {
+        el.focus();
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      setVal(userInput, ${u});
+      setVal(passInput, ${p});
+    });
+  })();
+  `;
+}
 
 function checkPasswordAutofill(webview) {
+  // Inject capture script
   try {
-    webview.executeJavaScript(`
-      (function() {
-        // Autofill saved passwords
-        const forms = document.querySelectorAll('form');
-        forms.forEach(form => {
-          const passInput = form.querySelector('input[type="password"]');
-          const userInput = form.querySelector('input[type="text"], input[type="email"], input[name="username"], input[name="login"], input[name="email"]');
-          if (!passInput || !userInput) return;
-
-          // Listen for form submit to offer saving
-          form.addEventListener('submit', () => {
-            const username = userInput.value;
-            const password = passInput.value;
-            if (username && password) {
-              window.postMessage({ type: 'slime-password-submit', username, password, url: location.origin }, '*');
-            }
-          });
-        });
-
-        // Listen for messages from form submit
-        window.addEventListener('message', (e) => {
-          if (e.data && e.data.type === 'slime-password-submit') {
-            // This will be picked up by the ipc-message handler
-          }
-        });
-      })();
-    `);
+    webview.executeJavaScript(PASSWORD_CAPTURE_SCRIPT);
   } catch (e) {}
+
+  // Try autofill with saved credentials
+  const url = webview.getURL();
+  if (url) {
+    window.slime.passwordsFind(url).then(matches => {
+      if (matches.length > 0) {
+        const cred = matches[0];
+        try {
+          webview.executeJavaScript(makeAutofillScript(cred.username, cred.password));
+        } catch (e) {}
+      }
+    });
+  }
+}
+
+function setupPasswordCapture(webview, tabId) {
+  // Listen for password captures via console messages
+  webview.addEventListener('console-message', (e) => {
+    if (e.message && e.message.startsWith('__SLIME_PW__')) {
+      try {
+        const data = JSON.parse(e.message.substring(12));
+        // Check if we already have this exact credential saved
+        window.slime.passwordsFind(data.url).then(existing => {
+          const alreadySaved = existing.some(p => p.username === data.username && p.password === data.password);
+          if (alreadySaved) return;
+
+          pendingPassword = data;
+          let domain = '';
+          try { domain = new URL(data.url).hostname; } catch(e) { domain = data.url; }
+          passwordBarText.textContent = `Login speichern? ${data.username} auf ${domain}`;
+          passwordBar.style.display = 'flex';
+          clearTimeout(passwordBarTimeout);
+          passwordBarTimeout = setTimeout(() => { passwordBar.style.display = 'none'; }, 15000);
+        });
+      } catch (err) {}
+    }
+  });
+
+  // Also re-inject capture script on in-page navigation (SPAs)
+  webview.addEventListener('did-navigate-in-page', () => {
+    try { webview.executeJavaScript(PASSWORD_CAPTURE_SCRIPT); } catch(e) {}
+  });
 }
 
 passwordBarSave.addEventListener('click', () => {
@@ -703,6 +854,89 @@ passwordBarSave.addEventListener('click', () => {
 passwordBarDismiss.addEventListener('click', () => {
   pendingPassword = null;
   passwordBar.style.display = 'none';
+});
+
+// Passwords Panel
+async function loadPasswordsPanel(query = '') {
+  let passwords = await window.slime.passwordsGet();
+
+  if (query) {
+    const q = query.toLowerCase();
+    passwords = passwords.filter(p =>
+      p.url.toLowerCase().includes(q) ||
+      p.username.toLowerCase().includes(q) ||
+      (p.title && p.title.toLowerCase().includes(q))
+    );
+  }
+
+  passwordsList.innerHTML = '';
+
+  if (passwords.length === 0) {
+    passwordsList.innerHTML = '<div class="panel-empty">No saved passwords</div>';
+    return;
+  }
+
+  passwords.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'panel-item';
+
+    let domain = '';
+    try { domain = new URL(item.url).hostname; } catch(e) { domain = item.url; }
+
+    el.innerHTML = `
+      <div class="panel-item-icon">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </div>
+      <div class="panel-item-info">
+        <div class="panel-item-title">${escapeHtml(item.username)}</div>
+        <div class="panel-item-url">${escapeHtml(domain)}</div>
+      </div>
+      <button class="panel-item-copy" title="Copy password">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+      <button class="panel-item-delete" title="Remove">&times;</button>
+    `;
+
+    el.querySelector('.panel-item-info').addEventListener('click', () => {
+      navigate(item.url);
+      passwordsPanel.style.display = 'none';
+    });
+
+    el.querySelector('.panel-item-copy').addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(item.password);
+      el.querySelector('.panel-item-copy').title = 'Copied!';
+      setTimeout(() => { el.querySelector('.panel-item-copy').title = 'Copy password'; }, 2000);
+    });
+
+    el.querySelector('.panel-item-delete').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await window.slime.passwordsRemove({ url: item.url, username: item.username });
+      loadPasswordsPanel(passwordsSearch.value);
+    });
+
+    passwordsList.appendChild(el);
+  });
+}
+
+passwordsBtn.addEventListener('click', () => {
+  closeAllPanels();
+  const isVisible = passwordsPanel.style.display !== 'none';
+  passwordsPanel.style.display = isVisible ? 'none' : 'flex';
+  if (!isVisible) {
+    passwordsSearch.value = '';
+    loadPasswordsPanel();
+  }
+});
+
+passwordsCloseBtn.addEventListener('click', () => {
+  passwordsPanel.style.display = 'none';
+});
+
+let passwordsSearchTimeout;
+passwordsSearch.addEventListener('input', () => {
+  clearTimeout(passwordsSearchTimeout);
+  passwordsSearchTimeout = setTimeout(() => loadPasswordsPanel(passwordsSearch.value), 300);
 });
 
 // ==========================================
@@ -763,7 +997,7 @@ function hideSettings() {
 settingsBtn.addEventListener('click', () => {
   if (settingsPage.style.display === 'block') {
     hideSettings();
-    const tab = tabs.find(t => t.id === activeTabId);
+    const tab = tabMap.get(activeTabId);
     if (tab) {
       if (tab.isNewTab) {
         newTabPage.style.display = 'flex';
@@ -797,12 +1031,23 @@ function getSessionData() {
     .map(t => ({ url: t.url, title: t.title }));
 }
 
+// Debounced session save — prevents rapid successive calls
+let _sessionSaveTimer = null;
+function debouncedSessionSave() {
+  if (_sessionSaveTimer) clearTimeout(_sessionSaveTimer);
+  _sessionSaveTimer = setTimeout(() => {
+    window.slime.saveSession(getSessionData());
+    _sessionSaveTimer = null;
+  }, 2000);
+}
+
 // Auto-save session every 30 seconds
 setInterval(() => {
-  window.slime.saveSession(getSessionData());
+  debouncedSessionSave();
 }, 30000);
 
 window.addEventListener('beforeunload', () => {
+  // On close, save immediately (no debounce)
   window.slime.saveSession(getSessionData());
 });
 
@@ -828,6 +1073,7 @@ function closeAllPanels() {
   historyPanel.style.display = 'none';
   bookmarksPanel.style.display = 'none';
   downloadsPanel.style.display = 'none';
+  passwordsPanel.style.display = 'none';
 }
 
 // ==========================================
@@ -857,17 +1103,17 @@ document.querySelectorAll('.ntp-shortcut').forEach(el => {
 });
 
 btnBack.addEventListener('click', () => {
-  const tab = tabs.find(t => t.id === activeTabId);
+  const tab = tabMap.get(activeTabId);
   try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(e) {}
 });
 
 btnForward.addEventListener('click', () => {
-  const tab = tabs.find(t => t.id === activeTabId);
+  const tab = tabMap.get(activeTabId);
   try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(e) {}
 });
 
 btnReload.addEventListener('click', () => {
-  const tab = tabs.find(t => t.id === activeTabId);
+  const tab = tabMap.get(activeTabId);
   if (tab?.webview) {
     try {
       if (tab.webview.isLoading()) {
@@ -901,20 +1147,25 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'F5') {
     e.preventDefault();
-    const tab = tabs.find(t => t.id === activeTabId);
+    const tab = tabMap.get(activeTabId);
     if (tab?.webview) tab.webview.reload();
   }
   if (e.altKey && e.key === 'ArrowLeft') {
-    const tab = tabs.find(t => t.id === activeTabId);
+    const tab = tabMap.get(activeTabId);
     try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(e) {}
   }
   if (e.altKey && e.key === 'ArrowRight') {
-    const tab = tabs.find(t => t.id === activeTabId);
+    const tab = tabMap.get(activeTabId);
     try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(e) {}
   }
   if (e.key === 'Escape') {
     closeAllPanels();
   }
+});
+
+// Close panels when clicking on main content area
+document.getElementById('main').addEventListener('click', () => {
+  closeAllPanels();
 });
 
 document.getElementById('btn-minimize').addEventListener('click', () => window.slime.minimize());
@@ -930,9 +1181,12 @@ window.slime.onBlockedCountUpdated((count) => {
 // ==========================================
 
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ==========================================
