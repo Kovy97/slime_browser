@@ -72,6 +72,13 @@ const BLOCK_DOMAINS = new Set([
   'revcontent.com', 'revjet.com',
 ]);
 
+// Build suffix set once at module level for O(n) subdomain checks
+// instead of rebuilding '.' + domain on every call
+const BLOCK_SUFFIXES = new Set();
+for (const domain of BLOCK_DOMAINS) {
+  BLOCK_SUFFIXES.add('.' + domain);
+}
+
 // Combined regex for patterns that need path/substring matching
 // Single compiled regex with alternation — tested once per URL
 const BLOCK_REGEX = new RegExp([
@@ -155,17 +162,23 @@ function extractHostname(url) {
 
 /**
  * Check if a hostname matches any blocked domain (including subdomains).
+ * Uses pre-built BLOCK_SUFFIXES set for faster subdomain lookups.
  */
 function isDomainBlocked(hostname) {
   if (BLOCK_DOMAINS.has(hostname)) return true;
-  // Check if it's a subdomain of a blocked domain
-  for (const domain of BLOCK_DOMAINS) {
-    if (hostname.endsWith('.' + domain)) return true;
+  // Check if it's a subdomain of a blocked domain using pre-built suffixes
+  for (const suffix of BLOCK_SUFFIXES) {
+    if (hostname.endsWith(suffix)) return true;
   }
   return false;
 }
 
 function shouldBlock(url) {
+  if (!url || typeof url !== 'string') return false;
+
+  // Skip data: and blob: URLs (can't block meaningfully)
+  if (url.startsWith('data:') || url.startsWith('blob:')) return false;
+
   // Whitelist check first (single regex)
   if (WHITELIST_REGEX.test(url)) return false;
 
@@ -194,9 +207,24 @@ async function setupAdblocker(browserSession, onBlocked) {
     }
   );
 
+  browserSession.webRequest.onBeforeRedirect(
+    { urls: ['*://*/*'] },
+    (details) => {
+      if (details.redirectURL && shouldBlock(details.redirectURL)) {
+        onBlocked(1);
+        // Can't cancel redirects, but log it for awareness
+        console.log('[Slime Adblocker] Blocked redirect to:', details.redirectURL.substring(0, 60));
+      }
+    }
+  );
+
   browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders };
     delete headers['X-Client-Data'];
+    // Remove fingerprinting headers
+    delete headers['Sec-CH-UA-Full-Version-List'];
+    delete headers['Sec-CH-UA-Model'];
+    delete headers['Sec-CH-UA-Platform-Version'];
     headers['DNT'] = '1';
     headers['Sec-GPC'] = '1';
     callback({ requestHeaders: headers });

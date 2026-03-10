@@ -78,6 +78,14 @@ function closeTab(id) {
   const tab = tabs[index];
 
   if (tab.webview) {
+    tab.webview.removeEventListener('page-title-updated', tab._listeners?.titleUpdated);
+    tab.webview.removeEventListener('did-navigate', tab._listeners?.didNavigate);
+    tab.webview.removeEventListener('page-favicon-updated', tab._listeners?.faviconUpdated);
+    tab.webview.removeEventListener('did-navigate-in-page', tab._listeners?.didNavigateInPage);
+    tab.webview.removeEventListener('did-start-loading', tab._listeners?.startLoading);
+    tab.webview.removeEventListener('did-stop-loading', tab._listeners?.stopLoading);
+    tab.webview.removeEventListener('dom-ready', tab._listeners?.domReady);
+    tab.webview.removeEventListener('new-window', tab._listeners?.newWindow);
     tab.webview.remove();
   }
 
@@ -98,6 +106,7 @@ function closeTab(id) {
 function switchToTab(id) {
   activeTabId = id;
   hideSettings();
+  closeAllPanels();
 
   document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
   const tabEl = document.querySelector(`[data-tab-id="${id}"]`);
@@ -184,7 +193,7 @@ function updateTabFavicon(id, url) {
       faviconEl.innerHTML = '';
       faviconEl.appendChild(img);
     };
-  } catch (e) {}
+  } catch (e) { console.warn('[Slime]', e.message || e); }
 }
 
 function updateTabUrl(id, url) {
@@ -214,11 +223,19 @@ function createWebview(tabId, url) {
   }
   webview.dataset.tabId = tabId;
 
-  webview.addEventListener('page-title-updated', (e) => {
-    updateTabTitle(tabId, e.title);
-  });
+  const tab = tabMap.get(tabId);
+  if (tab) {
+    tab._listeners = {};
+  }
 
-  webview.addEventListener('did-navigate', (e) => {
+  const _listeners = tab ? tab._listeners : {};
+
+  _listeners.titleUpdated = (e) => {
+    updateTabTitle(tabId, e.title);
+  };
+  webview.addEventListener('page-title-updated', _listeners.titleUpdated);
+
+  _listeners.didNavigate = (e) => {
     updateTabUrl(tabId, e.url);
     updateTabFavicon(tabId, e.url);
     updateNavButtons();
@@ -227,9 +244,10 @@ function createWebview(tabId, url) {
     // Record in history
     const wvTab = tabMap.get(tabId);
     recordHistory(e.url, wvTab?.title);
-  });
+  };
+  webview.addEventListener('did-navigate', _listeners.didNavigate);
 
-  webview.addEventListener('page-favicon-updated', (e) => {
+  _listeners.faviconUpdated = (e) => {
     if (e.favicons && e.favicons.length > 0) {
       const tabEl = document.querySelector(`[data-tab-id="${tabId}"]`);
       if (!tabEl) return;
@@ -240,52 +258,69 @@ function createWebview(tabId, url) {
       img.onerror = () => {};
       img.onload = () => { faviconEl.innerHTML = ''; faviconEl.appendChild(img); };
     }
-  });
+  };
+  webview.addEventListener('page-favicon-updated', _listeners.faviconUpdated);
 
-  webview.addEventListener('did-navigate-in-page', (e) => {
+  _listeners.didNavigateInPage = (e) => {
     if (e.isMainFrame) {
       updateTabUrl(tabId, e.url);
       updateNavButtons();
     }
-  });
+  };
+  webview.addEventListener('did-navigate-in-page', _listeners.didNavigateInPage);
 
-  webview.addEventListener('did-start-loading', () => {
+  _listeners.startLoading = () => {
     if (tabId === activeTabId) {
       btnReload.innerHTML = '&#x2715;';
       btnReload.title = 'Stop';
     }
-  });
+  };
+  webview.addEventListener('did-start-loading', _listeners.startLoading);
 
-  webview.addEventListener('did-stop-loading', () => {
+  _listeners.stopLoading = () => {
     if (tabId === activeTabId) {
       btnReload.innerHTML = '&#x21BB;';
       btnReload.title = 'Reload';
     }
-  });
+  };
+  webview.addEventListener('did-stop-loading', _listeners.stopLoading);
 
-  webview.addEventListener('dom-ready', () => {
+  _listeners.domReady = () => {
     injectContentScripts(webview, webview.getURL());
     checkPasswordAutofill(webview);
-  });
+  };
+  webview.addEventListener('dom-ready', _listeners.domReady);
 
   // Setup password capture listener
   setupPasswordCapture(webview, tabId);
 
   // Open links in new tab instead of popup — except auth flows
-  webview.addEventListener('new-window', (e) => {
+  _listeners.newWindow = (e) => {
     e.preventDefault();
     if (!e.url || e.url === 'about:blank') return;
 
     // Auth flows (Google sign-in, OAuth) stay in same tab
-    const isAuth = e.url.includes('accounts.google.com') ||
-                   e.url.includes('signin') ||
-                   e.url.includes('oauth') ||
-                   e.url.includes('login') ||
-                   e.url.includes('auth');
+    const isAuth = /^https:\/\/(accounts\.google\.com|.*\.okta\.com|login\.|auth\.|signin\.|oauth\.)/.test(e.url) ||
+                   e.url.includes('/oauth2/') || e.url.includes('/oauth/');
     if (isAuth) {
       webview.loadURL(e.url);
     } else {
       createTab(e.url);
+    }
+  };
+  webview.addEventListener('new-window', _listeners.newWindow);
+
+  // Handle webview crashes and load failures
+  webview.addEventListener('crashed', () => {
+    const t = tabMap.get(tabId);
+    if (t) t.title = '(Crashed) ' + t.title;
+    updateTabTitle(tabId, t?.title || 'Crashed');
+    console.warn('[Slime] Webview crashed for tab', tabId);
+  });
+
+  webview.addEventListener('did-fail-load', (e) => {
+    if (e.errorCode !== -3) { // -3 is aborted, ignore
+      console.warn('[Slime] Load failed:', e.errorDescription);
     }
   });
 
@@ -311,6 +346,12 @@ function navigate(input, newTab = false) {
   let url = input.trim();
   if (!url) return;
 
+  // Block dangerous URL schemes
+  if (/^(javascript|data|blob|file|vbscript):/i.test(url)) {
+    console.warn('[Slime] Blocked dangerous URL scheme:', url.substring(0, 30));
+    return;
+  }
+
   // Handle internal URLs
   if (url.toLowerCase() === 'slime://settings') {
     showSettings();
@@ -320,11 +361,14 @@ function navigate(input, newTab = false) {
   // Hide settings if navigating away
   hideSettings();
 
-  if (url.match(/^https?:\/\//) || url.match(/^[\w-]+\.\w{2,}/)) {
-    if (!url.match(/^https?:\/\//)) {
-      url = 'https://' + url;
-    }
-  } else {
+  let isUrl = false;
+  if (/^https?:\/\//i.test(url)) {
+    isUrl = true;
+  } else if (/^[\w][\w.-]*\.[a-z]{2,}(\/|$)/i.test(url)) {
+    url = 'https://' + url;
+    isUrl = true;
+  }
+  if (!isUrl) {
     url = SEARCH_ENGINE + encodeURIComponent(url);
   }
 
@@ -592,7 +636,7 @@ function renderDownloadItem(dl) {
     downloadsList.prepend(el);
   }
 
-  const progress = dl.totalBytes > 0 ? Math.round((dl.receivedBytes / dl.totalBytes) * 100) : 0;
+  const progress = Math.min(100, dl.totalBytes > 0 ? Math.round((dl.receivedBytes / dl.totalBytes) * 100) : 0);
   const state = dl.state || 'progressing';
 
   // If element already exists and download is still progressing, only update progress bar and status text
@@ -659,6 +703,7 @@ window.slime.onDownloadStarted((dl) => {
   const empty = downloadsList.querySelector('.panel-empty');
   if (empty) empty.remove();
   renderDownloadItem(dl);
+  closeAllPanels();
   downloadsPanel.style.display = 'flex';
   downloadBadge.classList.add('active');
 });
@@ -803,19 +848,21 @@ function checkPasswordAutofill(webview) {
   // Inject capture script
   try {
     webview.executeJavaScript(PASSWORD_CAPTURE_SCRIPT);
-  } catch (e) {}
+  } catch (e) { console.warn('[Slime]', e.message || e); }
 
-  // Try autofill with saved credentials
+  // Try autofill with saved credentials (HTTPS only)
   const url = webview.getURL();
-  if (url) {
+  if (url && url.startsWith('https://')) {
     window.slime.passwordsFind(url).then(matches => {
       if (matches.length > 0) {
         const cred = matches[0];
         try {
           webview.executeJavaScript(makeAutofillScript(cred.username, cred.password));
-        } catch (e) {}
+        } catch (e) {
+          console.warn('[Slime] Autofill error:', e.message || e);
+        }
       }
-    });
+    }).catch(e => console.warn('[Slime] Autofill error:', e));
   }
 }
 
@@ -838,13 +885,13 @@ function setupPasswordCapture(webview, tabId) {
           clearTimeout(passwordBarTimeout);
           passwordBarTimeout = setTimeout(() => { passwordBar.style.display = 'none'; }, 15000);
         });
-      } catch (err) {}
+      } catch (err) { console.warn('[Slime]', err.message || err); }
     }
   });
 
   // Also re-inject capture script on in-page navigation (SPAs)
   webview.addEventListener('did-navigate-in-page', () => {
-    try { webview.executeJavaScript(PASSWORD_CAPTURE_SCRIPT); } catch(e) {}
+    try { webview.executeJavaScript(PASSWORD_CAPTURE_SCRIPT); } catch(e) { console.warn('[Slime]', e.message || e); }
   });
 }
 
@@ -957,11 +1004,22 @@ const settingHomepage = document.getElementById('setting-homepage');
 const settingRestoreTabs = document.getElementById('setting-restore-tabs');
 const settingZoom = document.getElementById('setting-zoom');
 const settingAdblocker = document.getElementById('setting-adblocker');
+const settingGlass = document.getElementById('setting-glass');
+const settingAccentCustom = document.getElementById('setting-accent-custom');
+const colorSwatches = document.querySelectorAll('.color-swatch');
+const settingBgCustom = document.getElementById('setting-bg-custom');
+const settingBgOpacity = document.getElementById('setting-bg-opacity');
+const opacityValue = document.getElementById('opacity-value');
+const bgSwatches = document.querySelectorAll('.bg-swatch');
 
 async function loadSettings() {
   currentSettings = await window.slime.settingsGet();
   applySettings(currentSettings);
   populateSettingsUI(currentSettings);
+}
+
+function isValidHex(hex) {
+  return typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex);
 }
 
 function applySettings(s) {
@@ -970,6 +1028,38 @@ function applySettings(s) {
   } else {
     SEARCH_ENGINE = SEARCH_ENGINES[s.searchEngine] || SEARCH_ENGINES.google;
   }
+
+  // Accent color (validated)
+  const accent = isValidHex(s.accentColor) ? s.accentColor : '#4ade80';
+  document.documentElement.style.setProperty('--accent', accent);
+  // Generate soft/medium variants from hex
+  const r = parseInt(accent.slice(1, 3), 16);
+  const g = parseInt(accent.slice(3, 5), 16);
+  const b = parseInt(accent.slice(5, 7), 16);
+  document.documentElement.style.setProperty('--accent-soft', `rgba(${r}, ${g}, ${b}, 0.12)`);
+  document.documentElement.style.setProperty('--accent-medium', `rgba(${r}, ${g}, ${b}, 0.25)`);
+
+  // Background color with opacity (validated)
+  const bgHex = isValidHex(s.bgColor) ? s.bgColor : '#0c0c0c';
+  const bgOpacity = Math.max(0.3, Math.min(1, (s.bgOpacity != null ? s.bgOpacity : 100) / 100));
+  const br = parseInt(bgHex.slice(1, 3), 16);
+  const bg2 = parseInt(bgHex.slice(3, 5), 16);
+  const bb = parseInt(bgHex.slice(5, 7), 16);
+  document.documentElement.style.setProperty('--bg-base', `rgba(${br}, ${bg2}, ${bb}, ${bgOpacity})`);
+  // Surface = slightly lighter
+  document.documentElement.style.setProperty('--bg-surface', `rgba(${Math.min(br+8,255)}, ${Math.min(bg2+8,255)}, ${Math.min(bb+8,255)}, ${bgOpacity})`);
+  document.documentElement.style.setProperty('--bg-elevated', `rgba(${Math.min(br+16,255)}, ${Math.min(bg2+16,255)}, ${Math.min(bb+16,255)}, ${bgOpacity})`);
+  document.documentElement.style.setProperty('--bg-hover', `rgba(${Math.min(br+25,255)}, ${Math.min(bg2+25,255)}, ${Math.min(bb+25,255)}, ${Math.min(bgOpacity+0.1,1)})`);
+  document.documentElement.style.setProperty('--bg-active', `rgba(${Math.min(br+30,255)}, ${Math.min(bg2+30,255)}, ${Math.min(bb+30,255)}, ${Math.min(bgOpacity+0.1,1)})`);
+
+  // Hue-rotate the logo icon to match accent color
+  const hue = hexToHue(accent);
+  // Base icon is green (~120deg hue), rotate relative to that
+  const rotation = hue - 120;
+  document.documentElement.style.setProperty('--logo-hue', `${rotation}deg`);
+
+  // Glass morphism
+  document.body.classList.toggle('glass-mode', !!s.glassMorphism);
 }
 
 function populateSettingsUI(s) {
@@ -980,6 +1070,26 @@ function populateSettingsUI(s) {
   settingRestoreTabs.checked = s.restoreTabs;
   settingZoom.value = String(s.zoomLevel);
   settingAdblocker.checked = s.adblockerEnabled;
+  settingGlass.checked = !!s.glassMorphism;
+
+  // Accent color swatches
+  const accent = s.accentColor || '#4ade80';
+  settingAccentCustom.value = accent;
+  colorSwatches.forEach(sw => {
+    sw.classList.toggle('active', sw.dataset.color === accent);
+  });
+
+  // Background color swatches
+  const bgColor = s.bgColor || '#0c0c0c';
+  settingBgCustom.value = bgColor;
+  bgSwatches.forEach(sw => {
+    sw.classList.toggle('active', sw.dataset.color === bgColor);
+  });
+
+  // Opacity slider
+  const opacity = s.bgOpacity != null ? s.bgOpacity : 100;
+  settingBgOpacity.value = opacity;
+  opacityValue.textContent = opacity + '%';
 }
 
 async function saveSetting(key, value) {
@@ -1025,6 +1135,48 @@ settingHomepage.addEventListener('change', () => saveSetting('homepage', setting
 settingRestoreTabs.addEventListener('change', () => saveSetting('restoreTabs', settingRestoreTabs.checked));
 settingZoom.addEventListener('change', () => saveSetting('zoomLevel', parseInt(settingZoom.value)));
 settingAdblocker.addEventListener('change', () => saveSetting('adblockerEnabled', settingAdblocker.checked));
+settingGlass.addEventListener('change', () => saveSetting('glassMorphism', settingGlass.checked));
+
+// Color swatches
+colorSwatches.forEach(sw => {
+  sw.addEventListener('click', () => {
+    const color = sw.dataset.color;
+    saveSetting('accentColor', color);
+    settingAccentCustom.value = color;
+    colorSwatches.forEach(s => s.classList.toggle('active', s.dataset.color === color));
+  });
+});
+
+// Custom color picker
+settingAccentCustom.addEventListener('input', () => {
+  const color = settingAccentCustom.value;
+  saveSetting('accentColor', color);
+  colorSwatches.forEach(s => s.classList.remove('active'));
+});
+
+// Background swatches
+bgSwatches.forEach(sw => {
+  sw.addEventListener('click', () => {
+    const color = sw.dataset.color;
+    saveSetting('bgColor', color);
+    settingBgCustom.value = color;
+    bgSwatches.forEach(s => s.classList.toggle('active', s.dataset.color === color));
+  });
+});
+
+// Custom background color picker
+settingBgCustom.addEventListener('input', () => {
+  const color = settingBgCustom.value;
+  saveSetting('bgColor', color);
+  bgSwatches.forEach(s => s.classList.remove('active'));
+});
+
+// Opacity slider
+settingBgOpacity.addEventListener('input', () => {
+  const val = parseInt(settingBgOpacity.value);
+  opacityValue.textContent = val + '%';
+  saveSetting('bgOpacity', val);
+});
 
 // ==========================================
 // Session Restore
@@ -1068,6 +1220,7 @@ pinBtn.addEventListener('click', () => {
   pinBtn.classList.toggle('pinned', isPinned);
   document.body.classList.toggle('sidebar-pinned', isPinned);
   pinBtn.title = isPinned ? 'Unpin sidebar' : 'Pin sidebar';
+  saveSetting('sidebarPinned', isPinned);
 });
 
 // ==========================================
@@ -1705,7 +1858,6 @@ function closeAllPanels() {
   downloadsPanel.style.display = 'none';
   passwordsPanel.style.display = 'none';
   if (macrosPanel) macrosPanel.style.display = 'none';
-  hideSettings();
 }
 
 // ==========================================
@@ -1736,12 +1888,12 @@ document.querySelectorAll('.ntp-shortcut').forEach(el => {
 
 btnBack.addEventListener('click', () => {
   const tab = tabMap.get(activeTabId);
-  try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(e) {}
+  try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(e) { console.warn('[Slime]', e.message || e); }
 });
 
 btnForward.addEventListener('click', () => {
   const tab = tabMap.get(activeTabId);
-  try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(e) {}
+  try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(e) { console.warn('[Slime]', e.message || e); }
 });
 
 btnReload.addEventListener('click', () => {
@@ -1753,7 +1905,7 @@ btnReload.addEventListener('click', () => {
       } else {
         tab.webview.reload();
       }
-    } catch(e) {}
+    } catch(e) { console.warn('[Slime]', e.message || e); }
   }
 });
 
@@ -1784,11 +1936,11 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.altKey && e.key === 'ArrowLeft') {
     const tab = tabMap.get(activeTabId);
-    try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(e) {}
+    try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(ex) { console.warn('[Slime]', ex.message || ex); }
   }
   if (e.altKey && e.key === 'ArrowRight') {
     const tab = tabMap.get(activeTabId);
-    try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(e) {}
+    try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(ex) { console.warn('[Slime]', ex.message || ex); }
   }
   if (e.key === 'Escape') {
     closeAllPanels();
@@ -1821,6 +1973,21 @@ window.slime.onBlockedCountUpdated((count) => {
 // Utilities
 // ==========================================
 
+function hexToHue(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return 0;
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h = Math.round(h * 60);
+  return h < 0 ? h + 360 : h;
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -1839,6 +2006,13 @@ async function init() {
   webviewPreloadPath = await window.slime.getWebviewPreloadPath();
   await loadSettings();
 
+  // Restore sidebar pinned state
+  if (currentSettings?.sidebarPinned) {
+    sidebar.classList.add('pinned');
+    pinBtn.classList.add('pinned');
+    document.body.classList.add('sidebar-pinned');
+  }
+
   // Determine what to open
   const homepage = currentSettings?.homepage || DEFAULT_URL;
   let restored = false;
@@ -1848,6 +2022,11 @@ async function init() {
     if (sessionData && sessionData.length > 0) {
       sessionData.forEach(t => createTab(t.url));
       restored = true;
+      // Fix tab ID collision: ensure counter is above any restored tab ID
+      const maxId = Math.max(...tabs.map(t => t.id));
+      if (maxId >= tabIdCounter) {
+        tabIdCounter = maxId;
+      }
     }
   }
 

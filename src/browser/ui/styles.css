@@ -24,6 +24,13 @@
   --sidebar-expanded: 260px;
   --titlebar-height: 32px;
   --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --z-ntp: 5;
+  --z-titlebar: 10;
+  --z-password-bar: 80;
+  --z-sidebar: 100;
+  --z-panel: 101;
+  --z-macro-status: 999;
+  --z-modal: 1000;
 }
 
 * {
@@ -43,6 +50,150 @@ body {
 }
 
 /* ==========================================
+   Glass Morphism Mode
+   ========================================== */
+
+body.glass-mode #sidebar {
+  background: rgba(20, 20, 20, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+body.glass-mode #titlebar {
+  background: rgba(20, 20, 20, 0.5);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+body.glass-mode .panel-overlay {
+  background: rgba(20, 20, 20, 0.7);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+body.glass-mode #new-tab-page {
+  background: rgba(12, 12, 12, 0.6);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+}
+
+body.glass-mode #settings-page {
+  background: rgba(12, 12, 12, 0.6);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+}
+
+body.glass-mode .modal-overlay {
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+body.glass-mode .modal-content {
+  background: rgba(20, 20, 20, 0.75);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+body.glass-mode #password-bar {
+  background: rgba(20, 20, 20, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  body.glass-mode #sidebar,
+  body.glass-mode #titlebar,
+  body.glass-mode .panel-overlay,
+  body.glass-mode #new-tab-page,
+  body.glass-mode .settings-page {
+    background: var(--bg-surface) !important;
+  }
+}
+
+/* ==========================================
+   Color Picker (Settings)
+   ========================================== */
+
+.color-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.color-swatch,
+.bg-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color var(--transition), transform var(--transition);
+  padding: 0;
+}
+
+.color-swatch:hover,
+.bg-swatch:hover {
+  transform: scale(1.15);
+}
+
+.color-swatch.active,
+.bg-swatch.active {
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 2px var(--bg-base);
+}
+
+.color-input {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-input::-webkit-color-swatch {
+  border: 2px solid var(--border-hover);
+  border-radius: 50%;
+}
+
+/* ==========================================
+   Settings Slider
+   ========================================== */
+
+.settings-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  outline: none;
+  cursor: pointer;
+}
+
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-base);
+  box-shadow: 0 0 4px rgba(0,0,0,0.3);
+}
+
+.settings-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+/* ==========================================
    Sidebar (Vertical Tabs + URL Bar)
    Collapsed: 52px wide, shows only centered icons
    Expanded: 260px wide on hover/focus/pin
@@ -58,7 +209,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   flex-shrink: 0;
-  z-index: 100;
+  z-index: var(--z-sidebar);
   position: absolute;
   left: 0;
   top: 0;
@@ -106,6 +257,8 @@ body.sidebar-pinned #main {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  filter: hue-rotate(var(--logo-hue, 0deg)) saturate(1.2);
+  transition: filter 0.3s;
 }
 
 .logo-text {
@@ -399,7 +552,7 @@ body.sidebar-pinned #main {
   justify-content: center;
   flex-shrink: 0;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition: opacity var(--transition), background var(--transition), color var(--transition);
 }
 
 #sidebar:hover .tab:hover .tab-close,
@@ -429,7 +582,7 @@ body.sidebar-pinned #main {
   height: 34px;
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--accent);
   cursor: pointer;
   border-radius: var(--radius-sm);
   display: flex;
@@ -530,7 +683,7 @@ body.sidebar-pinned #main {
   flex-shrink: 0;
   -webkit-app-region: drag;
   position: relative;
-  z-index: 10;
+  z-index: var(--z-titlebar);
 }
 
 #titlebar-drag {
@@ -540,33 +693,39 @@ body.sidebar-pinned #main {
 
 #window-controls {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
   height: 100%;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
 }
 
-.win-btn {
-  width: 46px;
-  height: 100%;
+.traffic-btn {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
   border: none;
-  background: transparent;
-  color: var(--text-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, color 0.15s;
+  transition: filter var(--transition);
+  color: transparent;
+  padding: 4px;
+  box-sizing: content-box;
+  position: relative;
 }
 
-.win-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
+.traffic-close { background: #ff5f57; }
+.traffic-minimize { background: #febc2e; }
+.traffic-maximize { background: #28c840; }
 
-.win-btn-close:hover {
-  background: var(--danger);
-  color: white;
-}
+.traffic-btn:hover { filter: brightness(1.2); }
+.traffic-btn:active { filter: brightness(0.85); }
+
+#window-controls:hover .traffic-btn { color: rgba(0,0,0,0.5); }
+.traffic-btn svg { pointer-events: none; }
 
 /* ==========================================
    Webview Container
@@ -607,7 +766,7 @@ body.sidebar-pinned #main {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 5;
+  z-index: var(--z-ntp);
 }
 
 .ntp-content {
@@ -705,17 +864,18 @@ body.sidebar-pinned #main {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: var(--accent);
   transition: color var(--transition);
 }
 
 .ntp-shortcut:hover .ntp-shortcut-icon {
   color: var(--accent);
+  filter: brightness(1.3);
 }
 
 .ntp-shortcut span {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -731,9 +891,10 @@ body.sidebar-pinned #main {
   height: 100vh;
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
-  z-index: 101;
+  z-index: var(--z-panel);
   flex-direction: column;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  transition: left 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 /* Shift panels when sidebar expands */
@@ -909,7 +1070,7 @@ body.sidebar-pinned #main {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition: opacity var(--transition), background var(--transition), color var(--transition);
   flex-shrink: 0;
   font-size: 14px;
 }
@@ -935,7 +1096,7 @@ body.sidebar-pinned #main {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition: opacity var(--transition), background var(--transition), color var(--transition);
   flex-shrink: 0;
 }
 
@@ -1070,7 +1231,7 @@ body.sidebar-pinned #main {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  z-index: 80;
+  z-index: var(--z-password-bar);
   font-size: 13px;
   color: var(--text-primary);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
@@ -1123,7 +1284,7 @@ body.sidebar-pinned #main {
   width: 100%;
   height: 100%;
   background: var(--bg-base);
-  z-index: 5;
+  z-index: var(--z-ntp);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--bg-hover) transparent;
@@ -1308,15 +1469,15 @@ body.sidebar-pinned #main {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.7);
-  z-index: 1000;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .modal-content {
-  background: #1a1a2e;
-  border: 1px solid #2a2a4a;
+  background: var(--bg-elevated);
+  border: 1px solid var(--bg-hover);
   border-radius: var(--radius-md);
   width: 560px;
   max-height: 80vh;
@@ -1329,7 +1490,7 @@ body.sidebar-pinned #main {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #2a2a4a;
+  border-bottom: 1px solid var(--bg-hover);
 }
 
 .modal-header h3 {
@@ -1346,7 +1507,7 @@ body.sidebar-pinned #main {
   justify-content: flex-end;
   gap: 10px;
   padding: 16px 20px;
-  border-top: 1px solid #2a2a4a;
+  border-top: 1px solid var(--bg-hover);
 }
 
 /* ==========================================
@@ -1367,8 +1528,8 @@ body.sidebar-pinned #main {
 .form-group input,
 .form-group select {
   width: 100%;
-  background: #0c0c1a;
-  border: 1px solid #2a2a4a;
+  background: var(--bg-base);
+  border: 1px solid var(--bg-hover);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   color: var(--text-primary);
@@ -1384,11 +1545,11 @@ body.sidebar-pinned #main {
 }
 
 .macro-step-drop-above {
-  border-top: 2px solid #4ade80 !important;
+  border-top: 2px solid var(--accent) !important;
 }
 
 .macro-step-drop-below {
-  border-bottom: 2px solid #4ade80 !important;
+  border-bottom: 2px solid var(--accent) !important;
 }
 
 .macro-step-remove {
@@ -1410,9 +1571,9 @@ body.sidebar-pinned #main {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid #1a1a2e;
+  border-bottom: 1px solid var(--bg-elevated);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--transition);
 }
 
 .macro-item:hover {
@@ -1453,7 +1614,7 @@ body.sidebar-pinned #main {
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 13px;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--transition), color var(--transition);
 }
 
 .macro-item-actions button:hover {
@@ -1483,15 +1644,16 @@ body.sidebar-pinned #main {
   cursor: pointer;
   font-size: 14px;
   font-family: inherit;
-  transition: background 0.15s;
+  transition: background var(--transition);
 }
 
 .btn-primary:hover {
-  background: #22c55e;
+  background: var(--accent);
+  filter: brightness(0.9);
 }
 
 .btn-secondary {
-  background: #2a2a4a;
+  background: var(--bg-hover);
   color: var(--text-primary);
   border: none;
   border-radius: var(--radius-sm);
@@ -1499,11 +1661,25 @@ body.sidebar-pinned #main {
   cursor: pointer;
   font-size: 14px;
   font-family: inherit;
-  transition: background 0.15s;
+  transition: background var(--transition);
 }
 
 .btn-secondary:hover {
-  background: #3a3a5a;
+  background: var(--bg-active);
+}
+
+button:focus-visible,
+.nav-btn:focus-visible,
+.sidebar-btn:focus-visible,
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* ==========================================
@@ -1521,7 +1697,7 @@ body.sidebar-pinned #main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  z-index: 999;
+  z-index: var(--z-macro-status);
   font-size: 13px;
   color: var(--accent);
 }
@@ -1541,7 +1717,7 @@ body.sidebar-pinned #main {
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
-  transition: background 0.15s;
+  transition: background var(--transition);
 }
 
 #macro-status-bar #macro-status-stop:hover {
@@ -1630,7 +1806,7 @@ body.sidebar-pinned #main {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition: opacity var(--transition), background var(--transition), color var(--transition);
   flex-shrink: 0;
 }
 

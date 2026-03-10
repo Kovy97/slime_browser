@@ -4,7 +4,32 @@ const fs = require('fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
 const { execFile } = require('child_process');
+const crypto = require('crypto');
 const pkg = require('../package.json');
+
+// ==========================================
+// IPC Input Validation Helpers
+// ==========================================
+
+function validateString(val, maxLen = 2048) {
+  return typeof val === 'string' && val.length <= maxLen;
+}
+function validateUrl(val) {
+  if (!validateString(val, 4096)) return false;
+  try { new URL(val); return true; } catch { return false; }
+}
+function validateSettings(settings) {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return null;
+  const clean = {};
+  const allowed = ['searchEngine', 'customSearchUrl', 'homepage', 'sessionRestore', 'accentColor', 'bgColor', 'bgOpacity', 'glassMorphism'];
+  for (const key of allowed) {
+    if (key in settings) clean[key] = settings[key];
+  }
+  if (clean.accentColor && !/^#[0-9a-fA-F]{6}$/.test(clean.accentColor)) delete clean.accentColor;
+  if (clean.bgColor && !/^#[0-9a-fA-F]{6}$/.test(clean.bgColor)) delete clean.bgColor;
+  if (clean.bgOpacity != null) clean.bgOpacity = Math.max(30, Math.min(100, Number(clean.bgOpacity) || 100));
+  return clean;
+}
 
 // Chromium performance flags (must be set before app.whenReady)
 app.commandLine.appendSwitch('enable-gpu-rasterization');
@@ -19,7 +44,7 @@ app.commandLine.appendSwitch('disable-component-update');
 
 function getUrlFromArgs(args) {
   for (const arg of args) {
-    if (arg.startsWith('http://') || arg.startsWith('https://') || arg.endsWith('.html') || arg.endsWith('.htm')) {
+    if (arg.startsWith('http://') || arg.startsWith('https://')) {
       return arg;
     }
   }
@@ -70,9 +95,11 @@ function readJSON(filename, fallback) {
 
 function writeJSON(filename, data) {
   jsonCache.set(filename, data);
-  fs.writeFile(dataPath(filename), JSON.stringify(data, null, 2), (err) => {
-    if (err) console.error(`[Slime] Failed to write ${filename}:`, err);
-  });
+  try {
+    fs.writeFileSync(dataPath(filename), JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error(`[Slime] Failed to write ${filename}:`, err.message);
+  }
 }
 
 // ==========================================
@@ -98,6 +125,10 @@ const DEFAULT_SETTINGS = {
   adblockerEnabled: true,
   homepage: 'slime://newtab',
   zoomLevel: 100,
+  accentColor: '#4ade80',
+  bgColor: '#0c0c0c',
+  bgOpacity: 100,
+  glassMorphism: false,
 };
 
 function loadSettings() {
@@ -107,8 +138,10 @@ function loadSettings() {
 
 ipcMain.handle('settings-get', () => loadSettings());
 ipcMain.handle('settings-save', (_, settings) => {
-  writeJSON('settings.json', settings);
-  return { ...DEFAULT_SETTINGS, ...settings };
+  const clean = validateSettings(settings);
+  if (!clean) return loadSettings();
+  writeJSON('settings.json', clean);
+  return { ...DEFAULT_SETTINGS, ...clean };
 });
 
 // ==========================================
@@ -119,16 +152,26 @@ const debouncedSaveSession = debounce((tabsData) => {
   writeJSON('session.json', tabsData);
 }, 500);
 
-ipcMain.on('save-session', (_, tabsData) => debouncedSaveSession(tabsData));
-ipcMain.handle('load-session', () => readJSON('session.json', []));
+ipcMain.on('save-session', (_, tabsData) => {
+  if (!Array.isArray(tabsData)) return;
+  const clean = tabsData.filter(t => t && typeof t === 'object' && typeof t.url === 'string');
+  debouncedSaveSession(clean);
+});
+ipcMain.handle('load-session', () => {
+  const data = readJSON('session.json', []);
+  if (!Array.isArray(data)) return [];
+  return data.filter(t => t && typeof t === 'object' && typeof t.url === 'string');
+});
 
 // ==========================================
 // History
 // ==========================================
 
 ipcMain.handle('history-add', (_, entry) => {
+  if (!entry || typeof entry !== 'object') return false;
+  if (!validateString(entry.url, 4096) || !validateString(entry.title, 1024)) return false;
   const history = readJSON('history.json', []);
-  history.unshift({ ...entry, timestamp: Date.now() });
+  history.unshift({ url: entry.url, title: entry.title, timestamp: Date.now() });
   if (history.length > 5000) history.length = 5000;
   writeJSON('history.json', history);
   return true;
@@ -156,9 +199,11 @@ ipcMain.handle('history-clear', () => {
 ipcMain.handle('bookmarks-get', () => readJSON('bookmarks.json', []));
 
 ipcMain.handle('bookmarks-add', (_, bookmark) => {
+  if (!bookmark || typeof bookmark !== 'object') return readJSON('bookmarks.json', []);
+  if (!validateUrl(bookmark.url) || !validateString(bookmark.title, 1024)) return readJSON('bookmarks.json', []);
   const bookmarks = readJSON('bookmarks.json', []);
   if (bookmarks.some(b => b.url === bookmark.url)) return bookmarks;
-  bookmarks.unshift({ ...bookmark, timestamp: Date.now() });
+  bookmarks.unshift({ url: bookmark.url, title: bookmark.title, timestamp: Date.now() });
   writeJSON('bookmarks.json', bookmarks);
   return bookmarks;
 });
@@ -181,15 +226,19 @@ function encryptPassword(password) {
   if (safeStorage.isEncryptionAvailable()) {
     return safeStorage.encryptString(password).toString('base64');
   }
-  return password; // fallback to plain if encryption unavailable
+  console.warn('[Slime] Encryption unavailable - password not saved securely');
+  return '__UNENCRYPTED__' + Buffer.from(password).toString('base64');
 }
 
 function decryptPassword(encrypted) {
+  if (typeof encrypted === 'string' && encrypted.startsWith('__UNENCRYPTED__')) {
+    return Buffer.from(encrypted.slice(15), 'base64').toString('utf-8');
+  }
   if (safeStorage.isEncryptionAvailable()) {
     try {
       return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
     } catch (e) {
-      return encrypted; // fallback if decryption fails (old plaintext entry)
+      return encrypted;
     }
   }
   return encrypted;
@@ -205,8 +254,12 @@ ipcMain.handle('passwords-get', () => {
 });
 
 ipcMain.handle('passwords-save', (_, entry) => {
+  if (!entry || typeof entry !== 'object') return false;
+  if (!validateUrl(entry.url)) return false;
+  if (!validateString(entry.username, 255)) return false;
+  if (!validateString(entry.password, 1024)) return false;
   const passwords = readJSON('passwords.json', []);
-  const encryptedEntry = { ...entry, password: encryptPassword(entry.password) };
+  const encryptedEntry = { url: entry.url, username: entry.username, password: encryptPassword(entry.password) };
   const idx = passwords.findIndex(p => p.url === entry.url && p.username === entry.username);
   if (idx >= 0) {
     passwords[idx] = { ...encryptedEntry, updatedAt: Date.now() };
@@ -243,11 +296,17 @@ ipcMain.handle('passwords-find', (_, url) => {
 
 ipcMain.handle('macros-get', () => readJSON('macros.json', []));
 ipcMain.handle('macros-save', (_, macros) => {
-  writeJSON('macros.json', macros);
-  return macros;
+  if (!Array.isArray(macros) || macros.length > 50) return readJSON('macros.json', []);
+  const clean = macros.filter(m =>
+    m && typeof m === 'object' &&
+    validateString(m.name, 256) &&
+    Array.isArray(m.steps)
+  );
+  writeJSON('macros.json', clean);
+  return clean;
 });
 
-// Paths
+// Paths (internal-only: returns preload path for webview setup, not exposed to web content)
 ipcMain.handle('get-webview-preload-path', () => {
   return path.join(__dirname, 'browser', 'ui', 'webview-preload.js');
 });
@@ -276,14 +335,28 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'browser', 'ui', 'index.html'));
   Menu.setApplicationMenu(null);
 
+  mainWindow.on('closed', () => { mainWindow = null; });
+
+  let pendingUrlTimer = null;
   mainWindow.once('ready-to-show', () => {
+    mainWindow.maximize();
     mainWindow.show();
     // Open URL from command line args (default browser)
     if (pendingUrl) {
-      setTimeout(() => {
-        mainWindow.webContents.send('open-url', pendingUrl);
+      pendingUrlTimer = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('open-url', pendingUrl);
+        }
         pendingUrl = null;
+        pendingUrlTimer = null;
       }, 500);
+    }
+  });
+
+  mainWindow.on('close', () => {
+    if (pendingUrlTimer) {
+      clearTimeout(pendingUrlTimer);
+      pendingUrlTimer = null;
     }
   });
 
@@ -318,14 +391,20 @@ ipcMain.on('increment-blocked', () => {
 // YouTube script injection
 ipcMain.handle('get-youtube-script', () => getYouTubeScript());
 
-// Download management
+// Download management (restricted to safe directories)
 ipcMain.handle('download-open', (_, filePath) => {
   if (!filePath || typeof filePath !== 'string') return;
-  return shell.openPath(path.resolve(filePath));
+  const resolved = path.resolve(filePath);
+  const validDirs = [app.getPath('downloads'), app.getPath('userData'), app.getPath('desktop')];
+  if (!validDirs.some(dir => resolved.startsWith(dir))) return { error: 'Invalid path' };
+  return shell.openPath(resolved);
 });
 ipcMain.handle('download-show', (_, filePath) => {
   if (!filePath || typeof filePath !== 'string') return;
-  return shell.showItemInFolder(path.resolve(filePath));
+  const resolved = path.resolve(filePath);
+  const validDirs = [app.getPath('downloads'), app.getPath('userData'), app.getPath('desktop')];
+  if (!validDirs.some(dir => resolved.startsWith(dir))) return { error: 'Invalid path' };
+  shell.showItemInFolder(resolved);
 });
 
 // ==========================================
@@ -333,79 +412,83 @@ ipcMain.handle('download-show', (_, filePath) => {
 // ==========================================
 
 app.whenReady().then(async () => {
-  const webviewSession = session.fromPartition('persist:slime');
+  try {
+    const webviewSession = session.fromPartition('persist:slime');
 
-  // Set Chrome user-agent so Google/YouTube trust the browser
-  const chromeVersion = process.versions.chrome;
-  const chromeUA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
-  webviewSession.setUserAgent(chromeUA);
+    // Set Chrome user-agent so Google/YouTube trust the browser
+    const chromeVersion = process.versions.chrome;
+    const chromeUA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
+    webviewSession.setUserAgent(chromeUA);
 
-  await setupAdblocker(webviewSession, (count) => {
-    blockedCount += count;
-    mainWindow?.webContents.send('blocked-count-updated', blockedCount);
-  });
+    await setupAdblocker(webviewSession, (count) => {
+      blockedCount += count;
+      mainWindow?.webContents.send('blocked-count-updated', blockedCount);
+    });
 
-  // Download manager
-  const downloads = new Map();
-  let downloadIdCounter = 0;
+    // Download manager
+    const downloads = new Map();
+    let downloadIdCounter = 0;
 
-  // Cleanup completed/failed downloads after 1 hour
-  const DOWNLOAD_TTL = 60 * 60 * 1000;
-  setInterval(() => {
-    const now = Date.now();
-    for (const [id, dl] of downloads) {
-      if ((dl.state === 'completed' || dl.state === 'failed') &&
-          (now - dl.startTime) >= DOWNLOAD_TTL) {
-        downloads.delete(id);
+    // Cleanup completed/failed downloads after 1 hour
+    const DOWNLOAD_TTL = 60 * 60 * 1000;
+    setInterval(() => {
+      const now = Date.now();
+      for (const [id, dl] of downloads) {
+        if ((dl.state === 'completed' || dl.state === 'failed') &&
+            (now - dl.startTime) >= DOWNLOAD_TTL) {
+          downloads.delete(id);
+        }
       }
-    }
-  }, 5 * 60 * 1000);
+    }, 5 * 60 * 1000);
 
-  webviewSession.on('will-download', (event, item) => {
-    const id = ++downloadIdCounter;
-    const filename = item.getFilename();
-    const totalBytes = item.getTotalBytes();
+    webviewSession.on('will-download', (event, item) => {
+      const id = ++downloadIdCounter;
+      const filename = item.getFilename();
+      const totalBytes = item.getTotalBytes();
 
-    downloads.set(id, {
-      id, filename, totalBytes, receivedBytes: 0,
-      state: 'progressing', path: item.getSavePath(),
-      startTime: Date.now(),
-    });
+      downloads.set(id, {
+        id, filename, totalBytes, receivedBytes: 0,
+        state: 'progressing', path: item.getSavePath(),
+        startTime: Date.now(),
+      });
 
-    mainWindow?.webContents.send('download-started', { id, filename, totalBytes });
+      mainWindow?.webContents.send('download-started', { id, filename, totalBytes });
 
-    item.on('updated', (_, state) => {
-      const dl = downloads.get(id);
-      if (!dl) return;
-      dl.receivedBytes = item.getReceivedBytes();
-      dl.state = state;
-      dl.path = item.getSavePath();
-      mainWindow?.webContents.send('download-updated', {
-        id, receivedBytes: dl.receivedBytes, totalBytes: dl.totalBytes, state,
+      item.on('updated', (_, state) => {
+        const dl = downloads.get(id);
+        if (!dl) return;
+        dl.receivedBytes = item.getReceivedBytes();
+        dl.state = state;
+        dl.path = item.getSavePath();
+        mainWindow?.webContents.send('download-updated', {
+          id, receivedBytes: dl.receivedBytes, totalBytes: dl.totalBytes, state,
+        });
+      });
+
+      item.once('done', (_, state) => {
+        const dl = downloads.get(id);
+        if (!dl) return;
+        dl.state = state === 'completed' ? 'completed' : 'failed';
+        dl.receivedBytes = item.getReceivedBytes();
+        dl.path = item.getSavePath();
+        mainWindow?.webContents.send('download-done', {
+          id, state: dl.state, path: dl.path, filename: dl.filename,
+        });
       });
     });
 
-    item.once('done', (_, state) => {
-      const dl = downloads.get(id);
-      if (!dl) return;
-      dl.state = state === 'completed' ? 'completed' : 'failed';
-      dl.receivedBytes = item.getReceivedBytes();
-      dl.path = item.getSavePath();
-      mainWindow?.webContents.send('download-done', {
-        id, state: dl.state, path: dl.path, filename: dl.filename,
-      });
-    });
-  });
+    ipcMain.handle('downloads-get', () => Array.from(downloads.values()));
 
-  ipcMain.handle('downloads-get', () => Array.from(downloads.values()));
+    createWindow();
 
-  createWindow();
-
-  // ==========================================
-  // Asar Hot-Update System
-  // ==========================================
-  setTimeout(() => checkForAsarUpdate(), 3000);
-  ipcMain.handle('check-for-updates', () => checkForAsarUpdate());
+    // ==========================================
+    // Asar Hot-Update System
+    // ==========================================
+    setTimeout(() => checkForAsarUpdate(), 3000);
+    ipcMain.handle('check-for-updates', () => checkForAsarUpdate());
+  } catch (err) {
+    console.error('[Slime] Fatal error during app initialization:', err);
+  }
 });
 
 // ==========================================
@@ -425,7 +508,7 @@ function isNewerVersion(latest, current) {
 function checkForAsarUpdate() {
   const request = net.request('https://api.github.com/repos/Kovy97/slime_browser/releases/latest');
   request.setHeader('Accept', 'application/vnd.github+json');
-  request.setHeader('User-Agent', 'SlimeBrowser/' + pkg.version);
+  request.setHeader('User-Agent', 'SlimeBrowser');
 
   let body = '';
   request.on('response', (response) => {
@@ -482,11 +565,22 @@ function downloadAsarUpdate(url, version) {
     }
 
     const totalBytes = parseInt(response.headers['content-length'] || '0', 10);
+    const MAX_UPDATE_SIZE = 10 * 1024 * 1024; // 10MB
+    if (totalBytes > MAX_UPDATE_SIZE) {
+      file.close();
+      console.log('[Slime Updater] Update too large, skipping');
+      return;
+    }
     let receivedBytes = 0;
 
     response.on('data', (chunk) => {
-      file.write(chunk);
       receivedBytes += chunk.length;
+      if (receivedBytes > MAX_UPDATE_SIZE) {
+        file.close();
+        console.log('[Slime Updater] Update too large during download, skipping');
+        return;
+      }
+      file.write(chunk);
       if (totalBytes > 0) {
         const percent = Math.round((receivedBytes / totalBytes) * 100);
         mainWindow?.webContents.send('update-status', { status: 'progress', percent, version });
@@ -496,7 +590,14 @@ function downloadAsarUpdate(url, version) {
     response.on('end', () => {
       file.end(() => {
         fs.writeFileSync(versionPath, version, 'utf-8');
-        console.log(`[Slime Updater] Downloaded v${version} app.asar (${receivedBytes} bytes)`);
+        // Log SHA256 checksum for integrity verification
+        try {
+          const fileData = fs.readFileSync(tempPath);
+          const hash = crypto.createHash('sha256').update(fileData).digest('hex');
+          console.log(`[Slime Updater] Downloaded v${version} app.asar (${receivedBytes} bytes, SHA256: ${hash})`);
+        } catch (e) {
+          console.log(`[Slime Updater] Downloaded v${version} app.asar (${receivedBytes} bytes, checksum unavailable)`);
+        }
 
         dialog.showMessageBox(mainWindow, {
           type: 'info',
@@ -572,6 +673,12 @@ function applyPendingUpdate() {
     return false;
   }
 }
+
+app.on('before-quit', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('force-save-session'); } catch(e) {}
+  }
+});
 
 app.on('window-all-closed', () => app.quit());
 

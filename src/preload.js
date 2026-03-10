@@ -1,5 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Slime Browser API - exposed to renderer via contextBridge
+// All IPC channels are validated in main.js handlers
+// Callback functions (on*) return cleanup functions for listener removal
 contextBridge.exposeInMainWorld('slime', {
   // Webview preload path (for cosmetic ad filtering + anti-annoyance)
   getWebviewPreloadPath: () => ipcRenderer.invoke('get-webview-preload-path'),
@@ -11,59 +14,101 @@ contextBridge.exposeInMainWorld('slime', {
 
   // Window state
   onWindowState: (callback) => {
-    ipcRenderer.on('window-state', (_, state) => callback(state));
+    const handler = (_, state) => callback(state);
+    ipcRenderer.on('window-state', handler);
+    return () => ipcRenderer.removeListener('window-state', handler);
   },
 
   // Adblocker
   getBlockedCount: () => ipcRenderer.invoke('get-blocked-count'),
   onBlockedCountUpdated: (callback) => {
-    ipcRenderer.on('blocked-count-updated', (_, count) => callback(count));
+    const handler = (_, count) => callback(count);
+    ipcRenderer.on('blocked-count-updated', handler);
+    return () => ipcRenderer.removeListener('blocked-count-updated', handler);
   },
 
   // YouTube tools
   getYouTubeScript: () => ipcRenderer.invoke('get-youtube-script'),
 
   // Session restore
-  saveSession: (tabsData) => ipcRenderer.send('save-session', tabsData),
+  saveSession: (tabsData) => {
+    if (!Array.isArray(tabsData)) return;
+    ipcRenderer.send('save-session', tabsData);
+  },
   loadSession: () => ipcRenderer.invoke('load-session'),
 
   // Settings
   settingsGet: () => ipcRenderer.invoke('settings-get'),
-  settingsSave: (settings) => ipcRenderer.invoke('settings-save', settings),
+  settingsSave: (settings) => {
+    if (typeof settings !== 'object' || settings === null) return Promise.reject('Invalid settings');
+    return ipcRenderer.invoke('settings-save', settings);
+  },
 
   // History
-  historyAdd: (entry) => ipcRenderer.invoke('history-add', entry),
+  historyAdd: (entry) => {
+    if (!entry || typeof entry.url !== 'string') return Promise.reject('Invalid entry');
+    return ipcRenderer.invoke('history-add', entry);
+  },
   historyGet: (query) => ipcRenderer.invoke('history-get', query),
   historyClear: () => ipcRenderer.invoke('history-clear'),
 
   // Bookmarks
   bookmarksGet: () => ipcRenderer.invoke('bookmarks-get'),
-  bookmarksAdd: (bookmark) => ipcRenderer.invoke('bookmarks-add', bookmark),
+  bookmarksAdd: (bookmark) => {
+    if (!bookmark || typeof bookmark.url !== 'string') return Promise.reject('Invalid bookmark');
+    return ipcRenderer.invoke('bookmarks-add', bookmark);
+  },
   bookmarksRemove: (url) => ipcRenderer.invoke('bookmarks-remove', url),
   bookmarksCheck: (url) => ipcRenderer.invoke('bookmarks-check', url),
 
   // Downloads
-  onDownloadStarted: (cb) => ipcRenderer.on('download-started', (_, d) => cb(d)),
-  onDownloadUpdated: (cb) => ipcRenderer.on('download-updated', (_, d) => cb(d)),
-  onDownloadDone: (cb) => ipcRenderer.on('download-done', (_, d) => cb(d)),
-  downloadOpen: (p) => ipcRenderer.invoke('download-open', p),
-  downloadShow: (p) => ipcRenderer.invoke('download-show', p),
+  onDownloadStarted: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('download-started', handler);
+    return () => ipcRenderer.removeListener('download-started', handler);
+  },
+  onDownloadUpdated: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('download-updated', handler);
+    return () => ipcRenderer.removeListener('download-updated', handler);
+  },
+  onDownloadDone: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('download-done', handler);
+    return () => ipcRenderer.removeListener('download-done', handler);
+  },
+  downloadOpen: (filePath) => {
+    if (typeof filePath !== 'string') return Promise.reject('Invalid path');
+    return ipcRenderer.invoke('download-open', filePath);
+  },
+  downloadShow: (filePath) => {
+    if (typeof filePath !== 'string') return Promise.reject('Invalid path');
+    return ipcRenderer.invoke('download-show', filePath);
+  },
   downloadsGet: () => ipcRenderer.invoke('downloads-get'),
 
   // Passwords
   passwordsGet: () => ipcRenderer.invoke('passwords-get'),
-  passwordsSave: (entry) => ipcRenderer.invoke('passwords-save', entry),
+  passwordsSave: (entry) => {
+    if (!entry || typeof entry.url !== 'string' || typeof entry.password !== 'string') return Promise.reject('Invalid entry');
+    return ipcRenderer.invoke('passwords-save', entry);
+  },
   passwordsRemove: (data) => ipcRenderer.invoke('passwords-remove', data),
   passwordsFind: (url) => ipcRenderer.invoke('passwords-find', url),
 
   // Macros
   macros: {
     get: () => ipcRenderer.invoke('macros-get'),
-    save: (macros) => ipcRenderer.invoke('macros-save', macros),
+    save: (macros) => {
+      if (!Array.isArray(macros)) return Promise.reject('Invalid macros');
+      return ipcRenderer.invoke('macros-save', macros);
+    },
   },
 
   // Open URL from external source (default browser)
   onOpenUrl: (callback) => {
-    ipcRenderer.on('open-url', (_, url) => callback(url));
+    const handler = (_, url) => callback(url);
+    ipcRenderer.on('open-url', handler);
+    return () => ipcRenderer.removeListener('open-url', handler);
   },
 });

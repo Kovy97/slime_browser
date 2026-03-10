@@ -68,11 +68,20 @@ const YOUTUBE_TOOLS_SCRIPT = `
   }
   window._slimeObservers = [];
 
+  if (window._slimeLoopInterval) {
+    clearInterval(window._slimeLoopInterval);
+    window._slimeLoopInterval = null;
+  }
+
+  if (window._slimeKeydownHandler) {
+    document.removeEventListener('keydown', window._slimeKeydownHandler);
+    window._slimeKeydownHandler = null;
+  }
+
   const style = document.createElement('style');
   style.textContent = ${JSON.stringify(YOUTUBE_TOOLS_CSS)};
   document.head.appendChild(style);
 
-  let userSpeed = 1.0;
   let isReloadingVideo = false;
 
   // ===========================================
@@ -134,13 +143,22 @@ const YOUTUBE_TOOLS_SCRIPT = `
       return origFetch.apply(this, args).then(async (response) => {
         try {
           const text = await response.text();
-          let data = JSON.parse(text);
-          data = stripAdsFromPlayerData(data);
-          return new Response(JSON.stringify(data), {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers,
-          });
+          try {
+            let data = JSON.parse(text);
+            data = stripAdsFromPlayerData(data);
+            return new Response(JSON.stringify(data), {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            });
+          } catch(e) {
+            // Return original response if parsing fails
+            return new Response(text, {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            });
+          }
         } catch(e) {
           return origFetch.apply(this, args);
         }
@@ -212,7 +230,7 @@ const YOUTUBE_TOOLS_SCRIPT = `
         const startTime = getTimestamp();
         player.loadVideoById(videoId, startTime);
         console.log('[Slime] Ad bypassed via loadVideoById:', videoId);
-        setTimeout(() => { isReloadingVideo = false; }, 2000);
+        setTimeout(() => { isReloadingVideo = false; }, 1500);
         return;
       }
     } catch(e) {}
@@ -225,7 +243,7 @@ const YOUTUBE_TOOLS_SCRIPT = `
       if (typeof player.loadVideoById === 'function') {
         player.loadVideoById(videoId, getTimestamp());
         console.log('[Slime] Ad bypassed via cancel+reload:', videoId);
-        setTimeout(() => { isReloadingVideo = false; }, 2000);
+        setTimeout(() => { isReloadingVideo = false; }, 1500);
         return;
       }
     } catch(e) {}
@@ -244,7 +262,7 @@ const YOUTUBE_TOOLS_SCRIPT = `
       if (skipBtn) skipBtn.click();
     } catch(e) {}
 
-    setTimeout(() => { isReloadingVideo = false; }, 1000);
+    setTimeout(() => { isReloadingVideo = false; }, 1500);
   }
 
   // MutationObserver: React to ad-showing class instantly
@@ -291,7 +309,11 @@ const YOUTUBE_TOOLS_SCRIPT = `
 
   // Backup polling (less frequent since MutationObserver handles most cases)
   if (window._slimeBypassInterval) clearInterval(window._slimeBypassInterval);
-  window._slimeBypassInterval = setInterval(bypassAd, 500);
+  window._slimeBypassInterval = setInterval(() => {
+    if (location.hostname.includes('youtube.com')) {
+      bypassAd();
+    }
+  }, 500);
 
   // ===========================================
   // PLAYER TOOLS
@@ -301,7 +323,6 @@ const YOUTUBE_TOOLS_SCRIPT = `
     const video = document.querySelector('video');
     if (video) {
       video.playbackRate = speed;
-      userSpeed = speed;
       showNotification('Speed: ' + speed + 'x');
     }
   }
@@ -316,12 +337,17 @@ const YOUTUBE_TOOLS_SCRIPT = `
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    const link = document.createElement('a');
-    link.download = 'slime-screenshot-' + Date.now() + '.png';
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-    showNotification('Screenshot saved!');
+    try {
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      const link = document.createElement('a');
+      link.download = 'slime-screenshot-' + Date.now() + '.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      showNotification('Screenshot saved!');
+    } catch (e) {
+      showNotification('Screenshot failed - video is protected');
+      console.warn('[Slime YT] Screenshot CORS error:', e);
+    }
   }
 
   function togglePiP() {
@@ -332,19 +358,25 @@ const YOUTUBE_TOOLS_SCRIPT = `
       return;
     }
     if (document.pictureInPictureElement) {
-      document.exitPictureInPicture();
+      document.exitPictureInPicture().catch(e => {
+        showNotification('Failed to exit PiP');
+        console.warn('[Slime YT] PiP exit error:', e);
+      });
     } else {
-      video.requestPictureInPicture();
+      video.requestPictureInPicture().catch(e => {
+        showNotification('Failed to enter PiP');
+        console.warn('[Slime YT] PiP error:', e);
+      });
     }
   }
 
-  let loopStart = null, loopEnd = null, loopInterval = null;
+  let loopStart = null, loopEnd = null;
   function toggleLoop() {
     const video = document.querySelector('video');
     if (!video) return;
-    if (loopInterval) {
-      clearInterval(loopInterval);
-      loopInterval = null; loopStart = null; loopEnd = null;
+    if (window._slimeLoopInterval) {
+      clearInterval(window._slimeLoopInterval);
+      window._slimeLoopInterval = null; loopStart = null; loopEnd = null;
       showNotification('Loop disabled');
       return;
     }
@@ -353,9 +385,23 @@ const YOUTUBE_TOOLS_SCRIPT = `
       showNotification('Loop start: ' + formatTime(loopStart));
     } else {
       loopEnd = video.currentTime;
+      if (loopEnd <= loopStart) {
+        // Swap if end is before start
+        const tmp = loopStart;
+        loopStart = loopEnd;
+        loopEnd = tmp;
+      }
+      if (loopEnd - loopStart < 0.5) {
+        showNotification('Loop segment too short (min 0.5s)');
+        loopStart = null;
+        loopEnd = null;
+        return;
+      }
       showNotification('Looping ' + formatTime(loopStart) + ' - ' + formatTime(loopEnd));
-      loopInterval = setInterval(() => {
-        if (video.currentTime >= loopEnd) video.currentTime = loopStart;
+      window._slimeLoopInterval = setInterval(() => {
+        if (video.currentTime >= loopEnd || video.currentTime < loopStart) {
+          video.currentTime = loopStart;
+        }
       }, 100);
     }
   }

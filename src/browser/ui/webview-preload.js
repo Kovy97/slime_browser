@@ -162,7 +162,8 @@ try {
       if (htmlStyle.overflow === 'hidden') htmlStyle.overflow = '';
 
       // Only hide overlay backdrops (semi-transparent full-screen covers)
-      const allEls = document.querySelectorAll('div');
+      // Targeted selector: most cookie/ad overlays have a class or id
+      const allEls = document.querySelectorAll('div[class], div[id]');
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       for (const el of allEls) {
@@ -170,13 +171,23 @@ try {
         if (style.position !== 'fixed') continue;
         const z = parseInt(style.zIndex, 10);
         if (isNaN(z) || z <= 999) continue;
+
+        // Skip elements that might be security warnings
+        const text = el.textContent?.toLowerCase() || '';
+        if (text.includes('security') || text.includes('warning') || text.includes('dangerous') ||
+            text.includes('malware') || text.includes('phishing') || text.includes('certificate') ||
+            text.includes('sicherheit') || text.includes('warnung')) {
+          continue;
+        }
+
         const rect = el.getBoundingClientRect();
         if (rect.width < vw * 0.8 || rect.height < vh * 0.8) continue;
         // Only target backdrop-like elements (semi-transparent or no visible content)
         const bg = style.backgroundColor;
         const opacity = parseFloat(style.opacity);
-        const rgbaMatch = bg.match(/rgba?\([\d\s,]+,\s*([\d.]+)\)/);
-        const bgAlpha = rgbaMatch ? parseFloat(rgbaMatch[1]) : 1;
+        // Robust rgba regex with explicit character classes to prevent ReDoS
+        const rgbaMatch = bg.match(/rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*([\d.]+))?\s*\)/);
+        const bgAlpha = rgbaMatch && rgbaMatch[1] ? parseFloat(rgbaMatch[1]) : 1;
         const isBackdrop = bgAlpha < 0.95 || opacity < 0.95;
         if (isBackdrop && el.children.length <= 1) {
           el.style.setProperty('display', 'none', 'important');
@@ -214,8 +225,15 @@ try {
       } catch (e) { /* never break the page */ }
     }
 
-    // ---- Expose for manual trigger ----
-    window.__slimeDismissPopups = runAllDismiss;
+    // ---- Internal reference via non-enumerable Symbol-based key ----
+    // Websites cannot detect or enumerate this property
+    const _slimeKey = Symbol.for('slime-dismiss');
+    Object.defineProperty(window, _slimeKey, {
+      value: runAllDismiss,
+      enumerable: false,
+      configurable: false,
+      writable: false
+    });
 
     // =========================================================================
     // Trigger on DOMContentLoaded + delayed re-run for lazy-loaded banners
@@ -237,12 +255,12 @@ try {
         observer.disconnect();
         return;
       }
-      // Debounce: max once per 500ms
+      // Debounce: max once per 1000ms to reduce CPU impact
       if (debounceTimer) return;
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
         runAllDismiss();
-      }, 500);
+      }, 1000);
     });
 
     // Start observing once body is available
