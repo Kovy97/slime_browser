@@ -361,9 +361,7 @@ function createWebview(tabId, url) {
   webview.setAttribute('partition', 'persist:slime');
   webview.setAttribute('autosize', 'on');
   webview.setAttribute('allowpopups', '');
-  // contextIsolation=no so the preload anti-detection spoofing runs in the page's
-  // JS context (required for Cloudflare bypass). Still secure: nodeIntegration=false.
-  webview.setAttribute('webpreferences', 'contextIsolation=no, sandbox=no, webgl=yes, enableWebSQL=no');
+  webview.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes, webgl=yes, enableWebSQL=no');
   if (webviewPreloadPath) {
     webview.setAttribute('preload', `file://${webviewPreloadPath}`);
   }

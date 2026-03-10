@@ -583,6 +583,113 @@ app.whenReady().then(async () => {
     // NOTE: Sec-CH-UA header override is now in adblocker/engine.js (merged into
     // the single onBeforeSendHeaders handler to avoid Electron replacing it)
 
+    // Anti-detection script injected into EVERY webview's main world via main process.
+    // This is the most reliable method — it bypasses contextIsolation entirely because
+    // executeJavaScript always runs in the main world from the main process.
+    const antiDetectionScript = `(function() {
+      if (window.__slimeAntiDetect) return;
+      window.__slimeAntiDetect = true;
+
+      // navigator.webdriver
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
+
+      // window.chrome (real Chrome always has this)
+      if (!window.chrome) window.chrome = {};
+      if (!window.chrome.runtime) window.chrome.runtime = { connect: function(){}, sendMessage: function(){} };
+      if (!window.chrome.csi) window.chrome.csi = function() { return {}; };
+      if (!window.chrome.loadTimes) window.chrome.loadTimes = function() { return {}; };
+
+      // navigator.plugins
+      var pd = { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' };
+      var fp = {
+        length: 5,
+        0: { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: pd.description, length: 1, 0: pd, item: function(i){return this[i]||null}, namedItem: function(){return pd} },
+        1: { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1, 0: pd, item: function(i){return this[i]||null}, namedItem: function(){return pd} },
+        2: { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 0, item: function(){return null}, namedItem: function(){return null} },
+        3: { name: 'Chromium PDF Plugin', filename: 'internal-pdf-viewer', description: pd.description, length: 1, 0: pd, item: function(i){return this[i]||null}, namedItem: function(){return pd} },
+        4: { name: 'Chromium PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1, 0: pd, item: function(i){return this[i]||null}, namedItem: function(){return pd} },
+        item: function(i) { return this[i] || null; },
+        namedItem: function(n) { for (var i=0;i<this.length;i++) if(this[i].name===n) return this[i]; return null; },
+        refresh: function() {}
+      };
+      Object.defineProperty(navigator, 'plugins', { get: function() { return fp; }, configurable: true });
+
+      // navigator.mimeTypes
+      var fm = {
+        length: 2,
+        0: { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: fp[0] },
+        1: { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: fp[1] },
+        item: function(i) { return this[i] || null; },
+        namedItem: function(n) { for (var i=0;i<this.length;i++) if(this[i].type===n) return this[i]; return null; }
+      };
+      Object.defineProperty(navigator, 'mimeTypes', { get: function() { return fm; }, configurable: true });
+
+      // navigator.userAgentData
+      var cm = '${chromeMajor}';
+      var cv = '${chromeVersion}';
+      var uad = {
+        brands: [
+          { brand: 'Google Chrome', version: cm },
+          { brand: 'Chromium', version: cm },
+          { brand: 'Not_A Brand', version: '24' }
+        ],
+        mobile: false,
+        platform: 'Windows',
+        getHighEntropyValues: function() {
+          return Promise.resolve({
+            brands: this.brands, mobile: false, platform: 'Windows',
+            platformVersion: '15.0.0', architecture: 'x86', bitness: '64',
+            model: '', uaFullVersion: cv,
+            fullVersionList: [
+              { brand: 'Google Chrome', version: cv },
+              { brand: 'Chromium', version: cv },
+              { brand: 'Not_A Brand', version: '24.0.0.0' }
+            ]
+          });
+        },
+        toJSON: function() { return { brands: this.brands, mobile: this.mobile, platform: this.platform }; }
+      };
+      Object.defineProperty(navigator, 'userAgentData', { get: function() { return uad; }, configurable: true });
+
+      // navigator.languages
+      if (!navigator.languages || navigator.languages.length === 0) {
+        Object.defineProperty(navigator, 'languages', { get: function() { return ['de-DE','de','en-US','en']; }, configurable: true });
+      }
+
+      // Clean UA string
+      var ua = navigator.userAgent;
+      var cleanUA = ua.replace(/\\s*Electron\\/[\\d.]+/g, '').replace(/\\s*SlimeBrowser\\/[\\d.]+/g, '');
+      if (cleanUA !== ua) {
+        Object.defineProperty(navigator, 'userAgent', { get: function() { return cleanUA; }, configurable: true });
+        Object.defineProperty(navigator, 'appVersion', { get: function() { return cleanUA.replace('Mozilla/',''); }, configurable: true });
+      }
+
+      // Permissions API fix
+      var origQuery = navigator.permissions && navigator.permissions.query && navigator.permissions.query.bind(navigator.permissions);
+      if (origQuery) {
+        navigator.permissions.query = function(p) {
+          if (p.name === 'notifications') return Promise.resolve({ state: Notification.permission, onchange: null });
+          return origQuery(p);
+        };
+      }
+    })();`;
+
+    // Inject into every webview as soon as it's created
+    app.on('web-contents-created', (_, contents) => {
+      if (contents.getType() === 'webview') {
+        // Inject at frame creation — earliest possible moment
+        contents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
+          if (isMainFrame) {
+            contents.executeJavaScript(antiDetectionScript).catch(() => {});
+          }
+        });
+        // Backup: also inject at dom-ready in case did-start-navigation was too early
+        contents.on('dom-ready', () => {
+          contents.executeJavaScript(antiDetectionScript).catch(() => {});
+        });
+      }
+    });
+
     // HTTP Basic/Digest Auth popup
     app.on('login', (event, webContents, details, authInfo, callback) => {
       event.preventDefault();
