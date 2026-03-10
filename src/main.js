@@ -175,6 +175,16 @@ ipcMain.handle('passwords-find', (_, url) => {
 });
 
 // ==========================================
+// Macros
+// ==========================================
+
+ipcMain.handle('macros-get', () => readJSON('macros.json', []));
+ipcMain.handle('macros-save', (_, macros) => {
+  writeJSON('macros.json', macros);
+  return macros;
+});
+
+// ==========================================
 // Window
 // ==========================================
 

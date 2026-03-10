@@ -52,4 +52,10 @@ contextBridge.exposeInMainWorld('slime', {
   passwordsSave: (entry) => ipcRenderer.invoke('passwords-save', entry),
   passwordsRemove: (data) => ipcRenderer.invoke('passwords-remove', data),
   passwordsFind: (url) => ipcRenderer.invoke('passwords-find', url),
+
+  // Macros
+  macros: {
+    get: () => ipcRenderer.invoke('macros-get'),
+    save: (macros) => ipcRenderer.invoke('macros-save', macros),
+  },
 });

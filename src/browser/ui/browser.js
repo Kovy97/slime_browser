@@ -1066,6 +1066,528 @@ pinBtn.addEventListener('click', () => {
 });
 
 // ==========================================
+// Macros
+// ==========================================
+
+const macrosBtn = document.getElementById('macros-btn');
+const macrosPanel = document.getElementById('macros-panel');
+const macrosList = document.getElementById('macros-list');
+const macrosCloseBtn = document.getElementById('macros-panel-close');
+const macrosAddBtn = document.getElementById('macro-create-btn');
+
+// Safely serialize a CSS selector for use inside executeJavaScript strings.
+// Returns a JS string literal (with quotes) that can be embedded directly.
+function safeSelector(selector) {
+  return JSON.stringify(String(selector));
+}
+
+// Dismiss common cookie/popup overlays in the page
+const DISMISS_POPUPS_SCRIPT = `
+(function() {
+  const selectors = [
+    '[class*="cookie"] button',
+    '[class*="consent"] button',
+    '[id*="cookie"] button',
+    '[id*="consent"] button',
+    '[class*="Cookie"] button',
+    '[class*="Consent"] button',
+    'button[class*="accept"]',
+    'button[class*="Accept"]',
+    'button[id*="accept"]',
+    'a[class*="accept"]',
+    '[class*="popup"] button[class*="close"]',
+    '[class*="modal"] button[class*="close"]',
+    '[class*="overlay"] button[class*="close"]',
+    '[class*="banner"] button[class*="close"]',
+    '[aria-label="Close"]',
+    '[aria-label="close"]',
+    '[aria-label="Dismiss"]',
+  ];
+  for (const sel of selectors) {
+    const els = document.querySelectorAll(sel);
+    els.forEach(el => {
+      if (el.offsetParent !== null) el.click();
+    });
+  }
+})();
+`;
+
+const MacroRunner = {
+  running: false,
+  currentStep: 0,
+  statusEl: null,
+
+  createStatusBar() {
+    if (this.statusEl) return;
+    const bar = document.createElement('div');
+    bar.id = 'macro-status-bar';
+    bar.innerHTML = \`
+      <span id="macro-status-text"></span>
+      <button id="macro-status-stop">Stop</button>
+    \`;
+    document.getElementById('main').appendChild(bar);
+    this.statusEl = bar;
+    bar.querySelector('#macro-status-stop').addEventListener('click', () => this.stop());
+  },
+
+  updateStatus(name, step, total, error) {
+    this.createStatusBar();
+    const text = this.statusEl.querySelector('#macro-status-text');
+    if (error) {
+      text.textContent = \`Error in "\${name}" at step \${step}/\${total}: \${error}\`;
+      this.statusEl.classList.add('error');
+    } else {
+      text.textContent = \`Running: \${name} — Step \${step}/\${total}\`;
+      this.statusEl.classList.remove('error');
+    }
+    this.statusEl.style.display = 'flex';
+  },
+
+  hideStatus() {
+    if (this.statusEl) {
+      setTimeout(() => {
+        if (!this.running && this.statusEl) {
+          this.statusEl.style.display = 'none';
+        }
+      }, 2000);
+    }
+  },
+
+  async run(macro, webview) {
+    if (!webview) {
+      const tab = tabMap.get(activeTabId);
+      if (!tab) return;
+      // If it's a new tab, first step must be navigate — we'll create webview on navigate
+      webview = tab.webview;
+    }
+    this.running = true;
+    this.currentStep = 0;
+
+    for (let i = 0; i < macro.steps.length; i++) {
+      if (!this.running) break;
+      this.currentStep = i;
+      this.updateStatus(macro.name, i + 1, macro.steps.length);
+      try {
+        webview = await this.executeStep(macro.steps[i], webview);
+      } catch (err) {
+        this.updateStatus(macro.name, i + 1, macro.steps.length, err.message || String(err));
+        this.running = false;
+        return;
+      }
+    }
+
+    if (this.running) {
+      this.updateStatus(macro.name, macro.steps.length, macro.steps.length);
+    }
+    this.running = false;
+    this.hideStatus();
+  },
+
+  stop() {
+    this.running = false;
+    if (this.statusEl) {
+      const text = this.statusEl.querySelector('#macro-status-text');
+      text.textContent = 'Macro stopped.';
+      this.hideStatus();
+    }
+  },
+
+  async executeStep(step, webview) {
+    switch (step.action) {
+      case 'navigate': {
+        // If we don't have a webview yet (new tab), create one
+        if (!webview) {
+          const tab = tabMap.get(activeTabId);
+          if (tab && tab.isNewTab) {
+            tab.isNewTab = false;
+            tab.url = step.url;
+            tab.webview = createWebview(tab.id, step.url);
+            newTabPage.style.display = 'none';
+            tab.webview.classList.add('active');
+            webview = tab.webview;
+            await new Promise(r => webview.addEventListener('did-finish-load', r, { once: true }));
+            return webview;
+          }
+        }
+        webview.loadURL(step.url);
+        await new Promise(r => webview.addEventListener('did-finish-load', r, { once: true }));
+        return webview;
+      }
+      case 'waitForElement': {
+        await this.waitForEl(webview, step.selector, step.timeout || 10000);
+        return webview;
+      }
+      case 'waitForNavigation': {
+        await new Promise((resolve) => {
+          const timeout = setTimeout(() => resolve(), step.timeout || 15000);
+          webview.addEventListener('did-navigate', () => { clearTimeout(timeout); resolve(); }, { once: true });
+        });
+        return webview;
+      }
+      case 'wait': {
+        await new Promise(r => setTimeout(r, step.ms || 1000));
+        return webview;
+      }
+      case 'fill': {
+        let value = step.value || '';
+        if (step.usePassword) {
+          const passwords = await window.slime.passwordsFind(webview.getURL());
+          if (passwords.length > 0) value = passwords[0].password;
+        }
+        const fillSel = safeSelector(step.selector);
+        const fillVal = JSON.stringify(value);
+        await webview.executeJavaScript(\`
+          (() => {
+            const el = document.querySelector(\${fillSel});
+            if (el) {
+              el.focus();
+              el.value = \${fillVal};
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          })()
+        \`);
+        return webview;
+      }
+      case 'click': {
+        const clickSel = safeSelector(step.selector);
+        await webview.executeJavaScript(\`
+          (() => {
+            const el = document.querySelector(\${clickSel});
+            if (el) el.click();
+          })()
+        \`);
+        return webview;
+      }
+      case 'check': {
+        const checkSel = safeSelector(step.selector);
+        await webview.executeJavaScript(\`
+          (() => {
+            const el = document.querySelector(\${checkSel});
+            if (el && !el.checked) {
+              el.checked = true;
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          })()
+        \`);
+        return webview;
+      }
+      case 'select': {
+        const selectSel = safeSelector(step.selector);
+        const selectVal = JSON.stringify(step.value || '');
+        await webview.executeJavaScript(\`
+          (() => {
+            const el = document.querySelector(\${selectSel});
+            if (el) {
+              el.value = \${selectVal};
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          })()
+        \`);
+        return webview;
+      }
+      case 'executeScript': {
+        if (step.script) {
+          await webview.executeJavaScript(step.script);
+        }
+        return webview;
+      }
+      case 'dismissPopups': {
+        await webview.executeJavaScript(DISMISS_POPUPS_SCRIPT);
+        return webview;
+      }
+      case 'keypress': {
+        const key = JSON.stringify(step.key || 'Enter');
+        const kpSel = step.selector ? safeSelector(step.selector) : null;
+        await webview.executeJavaScript(\`
+          (() => {
+            const target = \${kpSel ? \`document.querySelector(\${kpSel}) || document.activeElement\` : 'document.activeElement'};
+            if (target) {
+              const opts = { key: \${key}, code: 'Key' + \${key}, bubbles: true, cancelable: true };
+              target.dispatchEvent(new KeyboardEvent('keydown', opts));
+              target.dispatchEvent(new KeyboardEvent('keypress', opts));
+              target.dispatchEvent(new KeyboardEvent('keyup', opts));
+            }
+          })()
+        \`);
+        return webview;
+      }
+      default:
+        console.warn('[Slime] Unknown macro action:', step.action);
+        return webview;
+    }
+  },
+
+  async waitForEl(webview, selector, timeout) {
+    const sel = safeSelector(selector);
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      if (!this.running) throw new Error('Macro cancelled');
+      const found = await webview.executeJavaScript(
+        \`!!document.querySelector(\${sel})\`
+      );
+      if (found) return;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    throw new Error(\`Timeout waiting for element: \${selector}\`);
+  },
+};
+
+// Macros Panel
+async function loadMacrosPanel() {
+  const macros = await window.slime.macros.get();
+  macrosList.innerHTML = '';
+
+  if (macros.length === 0) {
+    macrosList.innerHTML = '<div class="panel-empty">No macros yet. Click + to create one.</div>';
+    return;
+  }
+
+  macros.forEach(macro => {
+    const el = document.createElement('div');
+    el.className = 'panel-item';
+    el.innerHTML = \`
+      <div class="panel-item-icon macro-icon">\${escapeHtml(macro.icon || '>')}</div>
+      <div class="panel-item-info">
+        <div class="panel-item-title">\${escapeHtml(macro.name)}</div>
+        <div class="panel-item-url">\${macro.steps.length} step\${macro.steps.length !== 1 ? 's' : ''}</div>
+      </div>
+      <button class="panel-item-play macro-play-btn" title="Run macro">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2l10 6-10 6V2z"/></svg>
+      </button>
+      <button class="panel-item-edit macro-edit-btn" title="Edit macro">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="panel-item-delete" title="Delete macro">&times;</button>
+    \`;
+
+    el.querySelector('.macro-play-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const tab = tabMap.get(activeTabId);
+      if (!tab) return;
+      macrosPanel.style.display = 'none';
+      MacroRunner.run(macro, tab.webview);
+    });
+
+    el.querySelector('.macro-edit-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openMacroEditor(macro);
+    });
+
+    el.querySelector('.panel-item-delete').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const allMacros = await window.slime.macros.get();
+      const filtered = allMacros.filter(m => m.id !== macro.id);
+      await window.slime.macros.save(filtered);
+      loadMacrosPanel();
+    });
+
+    macrosList.appendChild(el);
+  });
+}
+
+// Macro Editor — uses the existing #macro-editor-modal in index.html
+const macroEditorModal = document.getElementById('macro-editor-modal');
+const macroEditorTitle = document.getElementById('macro-editor-title');
+const macroNameInput = document.getElementById('macro-name-input');
+const macroIconInput = document.getElementById('macro-icon-input');
+const macroStepsContainer = document.getElementById('macro-steps-container');
+const macroAddStepBtn = document.getElementById('macro-add-step-btn');
+const macroEditorCloseBtn = document.getElementById('macro-editor-close');
+const macroEditorCancelBtn = document.getElementById('macro-editor-cancel');
+const macroEditorSaveBtn = document.getElementById('macro-editor-save');
+
+let _editingMacro = null;
+
+function openMacroEditor(existingMacro) {
+  const isEdit = !!existingMacro;
+  _editingMacro = existingMacro ? JSON.parse(JSON.stringify(existingMacro)) : {
+    id: 'macro-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8),
+    name: '',
+    icon: '>',
+    steps: [],
+    createdAt: Date.now(),
+  };
+
+  macroEditorTitle.textContent = isEdit ? 'Edit Macro' : 'New Macro';
+  macroNameInput.value = _editingMacro.name;
+  macroIconInput.value = _editingMacro.icon;
+  macroEditorModal.style.display = 'flex';
+
+  renderMacroSteps();
+}
+
+function closeMacroEditor() {
+  macroEditorModal.style.display = 'none';
+  _editingMacro = null;
+}
+
+function renderMacroSteps() {
+  macroStepsContainer.innerHTML = '';
+  if (!_editingMacro) return;
+
+  _editingMacro.steps.forEach((step, idx) => {
+    const stepEl = document.createElement('div');
+    stepEl.className = 'macro-step-row';
+    stepEl.innerHTML = \`
+      <span class="macro-step-num">\${idx + 1}</span>
+      <select class="macro-step-action settings-select" style="width:130px;">
+        <option value="navigate" \${step.action === 'navigate' ? 'selected' : ''}>navigate</option>
+        <option value="waitForElement" \${step.action === 'waitForElement' ? 'selected' : ''}>waitForElement</option>
+        <option value="waitForNavigation" \${step.action === 'waitForNavigation' ? 'selected' : ''}>waitForNavigation</option>
+        <option value="wait" \${step.action === 'wait' ? 'selected' : ''}>wait</option>
+        <option value="fill" \${step.action === 'fill' ? 'selected' : ''}>fill</option>
+        <option value="click" \${step.action === 'click' ? 'selected' : ''}>click</option>
+        <option value="check" \${step.action === 'check' ? 'selected' : ''}>check</option>
+        <option value="select" \${step.action === 'select' ? 'selected' : ''}>select</option>
+        <option value="executeScript" \${step.action === 'executeScript' ? 'selected' : ''}>executeScript</option>
+        <option value="dismissPopups" \${step.action === 'dismissPopups' ? 'selected' : ''}>dismissPopups</option>
+        <option value="keypress" \${step.action === 'keypress' ? 'selected' : ''}>keypress</option>
+      </select>
+      <div class="macro-step-fields"></div>
+      <button class="macro-step-remove" title="Remove step">&times;</button>
+    \`;
+
+    const actionSelect = stepEl.querySelector('.macro-step-action');
+    actionSelect.addEventListener('change', () => {
+      step.action = actionSelect.value;
+      const keepKeys = ['action'];
+      Object.keys(step).forEach(k => { if (!keepKeys.includes(k)) delete step[k]; });
+      renderStepFields(step, stepEl.querySelector('.macro-step-fields'));
+    });
+
+    stepEl.querySelector('.macro-step-remove').addEventListener('click', () => {
+      _editingMacro.steps.splice(idx, 1);
+      renderMacroSteps();
+    });
+
+    macroStepsContainer.appendChild(stepEl);
+    renderStepFields(step, stepEl.querySelector('.macro-step-fields'));
+  });
+}
+
+function renderStepFields(step, container) {
+  container.innerHTML = '';
+  const makeInput = (key, placeholder, type) => {
+    const inp = document.createElement('input');
+    inp.type = type || 'text';
+    inp.className = 'settings-input macro-step-input';
+    inp.placeholder = placeholder;
+    inp.value = step[key] || '';
+    inp.addEventListener('input', () => {
+      step[key] = type === 'number' ? (parseInt(inp.value) || 0) : inp.value;
+    });
+    container.appendChild(inp);
+  };
+  const makeCheckbox = (key, label) => {
+    const wrap = document.createElement('label');
+    wrap.className = 'macro-step-check';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!step[key];
+    cb.addEventListener('change', () => { step[key] = cb.checked; });
+    wrap.appendChild(cb);
+    wrap.appendChild(document.createTextNode(' ' + label));
+    container.appendChild(wrap);
+  };
+
+  switch (step.action) {
+    case 'navigate':
+      makeInput('url', 'URL', 'text');
+      break;
+    case 'waitForElement':
+      makeInput('selector', 'CSS Selector', 'text');
+      makeInput('timeout', 'Timeout (ms)', 'number');
+      break;
+    case 'waitForNavigation':
+      makeInput('timeout', 'Timeout (ms)', 'number');
+      break;
+    case 'wait':
+      makeInput('ms', 'Delay (ms)', 'number');
+      break;
+    case 'fill':
+      makeInput('selector', 'CSS Selector', 'text');
+      makeInput('value', 'Value', 'text');
+      makeCheckbox('usePassword', 'Use password manager');
+      break;
+    case 'click':
+      makeInput('selector', 'CSS Selector', 'text');
+      break;
+    case 'check':
+      makeInput('selector', 'CSS Selector', 'text');
+      break;
+    case 'select':
+      makeInput('selector', 'CSS Selector', 'text');
+      makeInput('value', 'Option value', 'text');
+      break;
+    case 'executeScript':
+      makeInput('script', 'JavaScript code', 'text');
+      break;
+    case 'dismissPopups':
+      break;
+    case 'keypress':
+      makeInput('key', 'Key (e.g. Enter, Tab)', 'text');
+      makeInput('selector', 'Target selector (optional)', 'text');
+      break;
+  }
+}
+
+if (macroAddStepBtn) {
+  macroAddStepBtn.addEventListener('click', () => {
+    if (!_editingMacro) return;
+    _editingMacro.steps.push({ action: 'navigate' });
+    renderMacroSteps();
+    macroStepsContainer.scrollTop = macroStepsContainer.scrollHeight;
+  });
+}
+
+if (macroEditorCloseBtn) {
+  macroEditorCloseBtn.addEventListener('click', closeMacroEditor);
+}
+if (macroEditorCancelBtn) {
+  macroEditorCancelBtn.addEventListener('click', closeMacroEditor);
+}
+
+if (macroEditorSaveBtn) {
+  macroEditorSaveBtn.addEventListener('click', async () => {
+    if (!_editingMacro) return;
+    _editingMacro.name = macroNameInput.value.trim() || 'Untitled Macro';
+    _editingMacro.icon = macroIconInput.value.trim() || '>';
+    const allMacros = await window.slime.macros.get();
+    const idx = allMacros.findIndex(m => m.id === _editingMacro.id);
+    if (idx >= 0) {
+      allMacros[idx] = _editingMacro;
+    } else {
+      allMacros.push(_editingMacro);
+    }
+    await window.slime.macros.save(allMacros);
+    closeMacroEditor();
+    loadMacrosPanel();
+  });
+}
+
+if (macrosBtn) {
+  macrosBtn.addEventListener('click', () => {
+    closeAllPanels();
+    const isVisible = macrosPanel.style.display !== 'none';
+    macrosPanel.style.display = isVisible ? 'none' : 'flex';
+    if (!isVisible) loadMacrosPanel();
+  });
+}
+
+if (macrosCloseBtn) {
+  macrosCloseBtn.addEventListener('click', () => {
+    macrosPanel.style.display = 'none';
+  });
+}
+
+if (macrosAddBtn) {
+  macrosAddBtn.addEventListener('click', () => {
+    openMacroEditor(null);
+  });
+}
+
+// ==========================================
 // Panel Helpers
 // ==========================================
 
@@ -1074,6 +1596,7 @@ function closeAllPanels() {
   bookmarksPanel.style.display = 'none';
   downloadsPanel.style.display = 'none';
   passwordsPanel.style.display = 'none';
+  if (macrosPanel) macrosPanel.style.display = 'none';
 }
 
 // ==========================================
