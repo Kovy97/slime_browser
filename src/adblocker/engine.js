@@ -30,6 +30,46 @@ const BLOCK_DOMAINS = new Set([
   'amplitude.com',
   'segment.io',
   'optimizely.com',
+
+  // Major ad networks
+  '2mdn.net', 'adform.net', 'admob.com', 'adsymptotic.com',
+  'advertising.com', 'bidswitch.net', 'casalemedia.com', 'contextweb.com',
+  'cpmstar.com', 'districtm.io', 'dotomi.com', 'exoclick.com',
+  'eyeota.net', 'flashtalking.com', 'freewheel.com', 'indexww.com',
+  'innity.com', 'mathtag.com', 'media.net', 'mediamath.com',
+  'mediavine.com', 'moatads.com', 'mookie1.com', 'myvisualiq.net',
+  'nativo.com', 'openx.net', 'pubmatic.com', 'rfihub.com',
+  'richaudience.com', 'rubiconproject.com', 'smaato.net', 'smartadserver.com',
+  'spotxchange.com', 'stickyadstv.com', 'teads.tv', 'tribalfusion.com',
+  'triplelift.com', 'turn.com', 'undertone.com', 'yieldmo.com',
+  'zedo.com',
+
+  // Trackers
+  'adjust.com', 'appsflyer.com', 'branch.io', 'bugsnag.com',
+  'chartbeat.com', 'clicktale.net', 'comscore.com', 'crazyegg.com',
+  'demdex.net', 'effectivemeasure.net', 'evidon.com',
+  'heapanalytics.com', 'histats.com',
+  'inspectlet.com', 'kissmetrics.com', 'krxd.net', 'liadm.com',
+  'logly.co.jp', 'luckyorange.com', 'marketo.com', 'mxpnl.com',
+  'nr-data.net', 'omtrdc.net', 'pardot.com',
+  'pingdom.net', 'pippio.com', 'sailthru.com', 'siteimproveanalytics.com',
+  'statcounter.com', 'tapad.com', 'tealiumiq.com', 'trackjs.com',
+  'tynt.com', 'urbanairship.com', 'webtrends.com',
+
+  // German-specific ad networks (GMX, Web.de, etc.)
+  'adsserver.unity3d.com', 'adtech.de', 'ag-online.de',
+  'emetriq.de', 'interred.de', 'iqdigital.de',
+  'meetrics.net', 'nuggad.net', 'plista.com',
+  'stroeerdigitalgroup.de', 'stroeer.de', 'yieldlove.com',
+  'showheroes.com', 'smartclip.net', 'ligatus.com',
+  'performance-marketplace.com',
+
+  // Note: uimserv.net and ui-portal.de are United Internet CDNs used for
+  // both ads AND legitimate site assets (CSS, JS) — do NOT block them
+
+  // Popup/redirect
+  'popads.net', 'popcash.net', 'propellerads.com',
+  'revcontent.com', 'revjet.com',
 ]);
 
 // Combined regex for patterns that need path/substring matching
@@ -47,12 +87,30 @@ const BLOCK_REGEX = new RegExp([
   '\\/pagead\\/interaction',
   'googleads\\.g\\.doubleclick',
   'play\\.google\\.com\\/log',
-  '\\/ads\\/',
   '\\/adserver\\/',
   '\\/ad_click',
   '\\/ad_view',
   '\\/popup_ad',
   '\\/banner_ad',
+
+  // Common ad paths (specific to avoid false positives)
+  '\\/ad[-_]?banner',
+  '\\/ad[-_]?click',
+  '\\/ad[-_]?track',
+  '\\/banner[-_]?ad',
+  '\\/click[-_]?track',
+  '\\/doubleclick',
+  '\\/interstitial',
+  '\\/pop[-_]?under',
+  '\\/prebid',
+  '\\/promo[-_]?ad',
+  '\\/tracking[-_]?pixel',
+  '[?&]ad_',
+  '[?&]adid=',
+  '[?&]ad_type=',
+  '[?&]click_url=',
+  '\\/beacon\\.',
+  '\\/collect\\?',
 ].join('|'), 'i');
 
 // Combined whitelist regex — single test per URL
@@ -68,6 +126,12 @@ const WHITELIST_REGEX = new RegExp([
   'youtubei\\/v1\\/player',
   'youtubei\\/v1\\/next',
   'youtube\\.com\\/youtubei',
+  'youtube-nocookie\\.com',
+  'youtu\\.be',
+  // United Internet CDNs (GMX, Web.de) — serve site CSS/JS, not just ads
+  'uimserv\\.net',
+  'ui-portal\\.de',
+  'uicdn\\.com',
 ].join('|'), 'i');
 
 /**
@@ -115,7 +179,7 @@ function shouldBlock(url) {
   return false;
 }
 
-const TOTAL_RULES = BLOCK_DOMAINS.size + 18; // Set entries + regex alternations
+const TOTAL_RULES = BLOCK_DOMAINS.size + 36; // Set entries + regex alternations
 
 async function setupAdblocker(browserSession, onBlocked) {
   browserSession.webRequest.onBeforeRequest(

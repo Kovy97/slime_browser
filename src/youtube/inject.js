@@ -62,6 +62,12 @@ const YOUTUBE_TOOLS_SCRIPT = `
   if (window.__slimeYTLoaded) return;
   window.__slimeYTLoaded = true;
 
+  // Cleanup previous observers if script re-runs
+  if (window._slimeObservers) {
+    window._slimeObservers.forEach(obs => obs.disconnect());
+  }
+  window._slimeObservers = [];
+
   const style = document.createElement('style');
   style.textContent = ${JSON.stringify(YOUTUBE_TOOLS_CSS)};
   document.head.appendChild(style);
@@ -260,6 +266,7 @@ const YOUTUBE_TOOLS_SCRIPT = `
       attributes: true,
       attributeFilter: ['class'],
     });
+    window._slimeObservers.push(observer);
 
     // Also remove ad DOM nodes as they appear
     const bodyObserver = new MutationObserver((mutations) => {
@@ -277,12 +284,14 @@ const YOUTUBE_TOOLS_SCRIPT = `
     });
 
     bodyObserver.observe(document.body, { childList: true, subtree: true });
+    window._slimeObservers.push(bodyObserver);
   }
 
   watchForAds();
 
   // Backup polling (less frequent since MutationObserver handles most cases)
-  setInterval(bypassAd, 500);
+  if (window._slimeBypassInterval) clearInterval(window._slimeBypassInterval);
+  window._slimeBypassInterval = setInterval(bypassAd, 500);
 
   // ===========================================
   // PLAYER TOOLS
@@ -300,6 +309,10 @@ const YOUTUBE_TOOLS_SCRIPT = `
   function takeScreenshot() {
     const video = document.querySelector('video');
     if (!video) return;
+    if (!video.videoWidth || !video.videoHeight) {
+      showNotification('Cannot capture screenshot - video not ready');
+      return;
+    }
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -314,6 +327,10 @@ const YOUTUBE_TOOLS_SCRIPT = `
   function togglePiP() {
     const video = document.querySelector('video');
     if (!video) return;
+    if (!document.pictureInPictureEnabled) {
+      showNotification('Picture-in-Picture not supported');
+      return;
+    }
     if (document.pictureInPictureElement) {
       document.exitPictureInPicture();
     } else {
@@ -386,14 +403,17 @@ const YOUTUBE_TOOLS_SCRIPT = `
     document.body.appendChild(toolbar);
   }
 
-  document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-    switch(e.key) {
-      case 's': takeScreenshot(); break;
-      case 'p': if (e.altKey) togglePiP(); break;
-      case 'l': if (e.altKey) toggleLoop(); break;
-    }
-  });
+  if (!window._slimeKeydownHandler) {
+    window._slimeKeydownHandler = function(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      switch(e.key) {
+        case 's': takeScreenshot(); break;
+        case 'p': if (e.altKey) togglePiP(); break;
+        case 'l': if (e.altKey) toggleLoop(); break;
+      }
+    };
+    document.addEventListener('keydown', window._slimeKeydownHandler);
+  }
 
   const pageObserver = new MutationObserver(() => {
     if (location.pathname === '/watch') {
@@ -404,6 +424,7 @@ const YOUTUBE_TOOLS_SCRIPT = `
     }
   });
   pageObserver.observe(document.body, { childList: true, subtree: true });
+  window._slimeObservers.push(pageObserver);
   if (location.pathname === '/watch') createToolbar();
 
   console.log('[Slime Browser] YouTube Tools v4 loaded');

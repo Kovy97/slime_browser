@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('slime', {
+  // Webview preload path (for cosmetic ad filtering + anti-annoyance)
+  getWebviewPreloadPath: () => ipcRenderer.invoke('get-webview-preload-path'),
+
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),

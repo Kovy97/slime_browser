@@ -13,6 +13,7 @@ let activeTabId = null;
 let tabIdCounter = 0;
 let youtubeScript = null;
 let currentSettings = null;
+let webviewPreloadPath = null;
 
 const DEFAULT_URL = 'slime://newtab';
 let SEARCH_ENGINE = 'https://www.google.com/search?q=';
@@ -207,6 +208,9 @@ function createWebview(tabId, url) {
   webview.setAttribute('partition', 'persist:slime');
   webview.setAttribute('autosize', 'on');
   webview.setAttribute('allowpopups', '');
+  if (webviewPreloadPath) {
+    webview.setAttribute('preload', `file://${webviewPreloadPath}`);
+  }
   webview.dataset.tabId = tabId;
 
   webview.addEventListener('page-title-updated', (e) => {
@@ -1121,10 +1125,10 @@ const MacroRunner = {
     if (this.statusEl) return;
     const bar = document.createElement('div');
     bar.id = 'macro-status-bar';
-    bar.innerHTML = \`
+    bar.innerHTML = `
       <span id="macro-status-text"></span>
       <button id="macro-status-stop">Stop</button>
-    \`;
+    `;
     document.getElementById('main').appendChild(bar);
     this.statusEl = bar;
     bar.querySelector('#macro-status-stop').addEventListener('click', () => this.stop());
@@ -1134,10 +1138,10 @@ const MacroRunner = {
     this.createStatusBar();
     const text = this.statusEl.querySelector('#macro-status-text');
     if (error) {
-      text.textContent = \`Error in "\${name}" at step \${step}/\${total}: \${error}\`;
+      text.textContent = `Error in "${name}" at step ${step}/${total}: ${error}`;
       this.statusEl.classList.add('error');
     } else {
-      text.textContent = \`Running: \${name} — Step \${step}/\${total}\`;
+      text.textContent = `Running: ${name} — Step ${step}/${total}`;
       this.statusEl.classList.remove('error');
     }
     this.statusEl.style.display = 'flex';
@@ -1154,6 +1158,7 @@ const MacroRunner = {
   },
 
   async run(macro, webview) {
+    if (this.running) return; // Already running a macro
     if (!webview) {
       const tab = tabMap.get(activeTabId);
       if (!tab) return;
@@ -1236,54 +1241,87 @@ const MacroRunner = {
         }
         const fillSel = safeSelector(step.selector);
         const fillVal = JSON.stringify(value);
-        await webview.executeJavaScript(\`
+        await webview.executeJavaScript(`
           (() => {
-            const el = document.querySelector(\${fillSel});
+            const el = document.querySelector(${fillSel});
             if (el) {
               el.focus();
-              el.value = \${fillVal};
+              el.value = ${fillVal};
               el.dispatchEvent(new Event('input', { bubbles: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
           })()
-        \`);
+        `);
         return webview;
       }
       case 'click': {
         const clickSel = safeSelector(step.selector);
-        await webview.executeJavaScript(\`
+        await webview.executeJavaScript(`
           (() => {
-            const el = document.querySelector(\${clickSel});
+            const el = document.querySelector(${clickSel});
             if (el) el.click();
           })()
-        \`);
+        `);
+        return webview;
+      }
+      case 'clickText': {
+        const searchText = JSON.stringify(step.text || '');
+        const tag = JSON.stringify(step.tag || '');
+        await webview.executeJavaScript(`
+          (() => {
+            const tag = ${tag} || 'a, button, [role="button"], input[type="button"], input[type="submit"], span, div';
+            const els = document.querySelectorAll(tag);
+            for (const el of els) {
+              const t = (el.textContent || el.value || '').trim();
+              if (t === ${searchText} || t.includes(${searchText})) {
+                if (el.offsetParent !== null || getComputedStyle(el).display !== 'none') {
+                  el.click();
+                  return;
+                }
+              }
+            }
+          })()
+        `);
+        return webview;
+      }
+      case 'clickPosition': {
+        const x = parseInt(step.x) || 0;
+        const y = parseInt(step.y) || 0;
+        await webview.executeJavaScript(`
+          (() => {
+            const el = document.elementFromPoint(${x}, ${y});
+            if (el) {
+              el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: ${x}, clientY: ${y} }));
+            }
+          })()
+        `);
         return webview;
       }
       case 'check': {
         const checkSel = safeSelector(step.selector);
-        await webview.executeJavaScript(\`
+        await webview.executeJavaScript(`
           (() => {
-            const el = document.querySelector(\${checkSel});
+            const el = document.querySelector(${checkSel});
             if (el && !el.checked) {
               el.checked = true;
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
           })()
-        \`);
+        `);
         return webview;
       }
       case 'select': {
         const selectSel = safeSelector(step.selector);
         const selectVal = JSON.stringify(step.value || '');
-        await webview.executeJavaScript(\`
+        await webview.executeJavaScript(`
           (() => {
-            const el = document.querySelector(\${selectSel});
+            const el = document.querySelector(${selectSel});
             if (el) {
-              el.value = \${selectVal};
+              el.value = ${selectVal};
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
           })()
-        \`);
+        `);
         return webview;
       }
       case 'executeScript': {
@@ -1299,17 +1337,18 @@ const MacroRunner = {
       case 'keypress': {
         const key = JSON.stringify(step.key || 'Enter');
         const kpSel = step.selector ? safeSelector(step.selector) : null;
-        await webview.executeJavaScript(\`
+        const targetExpr = kpSel ? `document.querySelector(${kpSel}) || document.activeElement` : 'document.activeElement';
+        await webview.executeJavaScript(`
           (() => {
-            const target = \${kpSel ? \`document.querySelector(\${kpSel}) || document.activeElement\` : 'document.activeElement'};
+            const target = ${targetExpr};
             if (target) {
-              const opts = { key: \${key}, code: 'Key' + \${key}, bubbles: true, cancelable: true };
+              const opts = { key: ${key}, code: 'Key' + ${key}, bubbles: true, cancelable: true };
               target.dispatchEvent(new KeyboardEvent('keydown', opts));
               target.dispatchEvent(new KeyboardEvent('keypress', opts));
               target.dispatchEvent(new KeyboardEvent('keyup', opts));
             }
           })()
-        \`);
+        `);
         return webview;
       }
       default:
@@ -1324,12 +1363,12 @@ const MacroRunner = {
     while (Date.now() - start < timeout) {
       if (!this.running) throw new Error('Macro cancelled');
       const found = await webview.executeJavaScript(
-        \`!!document.querySelector(\${sel})\`
+        `!!document.querySelector(${sel})`
       );
       if (found) return;
       await new Promise(r => setTimeout(r, 200));
     }
-    throw new Error(\`Timeout waiting for element: \${selector}\`);
+    throw new Error(`Timeout waiting for element: ${selector}`);
   },
 };
 
@@ -1346,11 +1385,11 @@ async function loadMacrosPanel() {
   macros.forEach(macro => {
     const el = document.createElement('div');
     el.className = 'panel-item';
-    el.innerHTML = \`
-      <div class="panel-item-icon macro-icon">\${escapeHtml(macro.icon || '>')}</div>
+    el.innerHTML = `
+      <div class="panel-item-icon macro-icon">${escapeHtml(macro.icon || '>')}</div>
       <div class="panel-item-info">
-        <div class="panel-item-title">\${escapeHtml(macro.name)}</div>
-        <div class="panel-item-url">\${macro.steps.length} step\${macro.steps.length !== 1 ? 's' : ''}</div>
+        <div class="panel-item-title">${escapeHtml(macro.name)}</div>
+        <div class="panel-item-url">${macro.steps.length} step${macro.steps.length !== 1 ? 's' : ''}</div>
       </div>
       <button class="panel-item-play macro-play-btn" title="Run macro">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2l10 6-10 6V2z"/></svg>
@@ -1359,7 +1398,7 @@ async function loadMacrosPanel() {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
       </button>
       <button class="panel-item-delete" title="Delete macro">&times;</button>
-    \`;
+    `;
 
     el.querySelector('.macro-play-btn').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1429,24 +1468,77 @@ function renderMacroSteps() {
   _editingMacro.steps.forEach((step, idx) => {
     const stepEl = document.createElement('div');
     stepEl.className = 'macro-step-row';
-    stepEl.innerHTML = \`
-      <span class="macro-step-num">\${idx + 1}</span>
+    stepEl.innerHTML = `
+      <span class="macro-step-num">${idx + 1}</span>
       <select class="macro-step-action settings-select" style="width:130px;">
-        <option value="navigate" \${step.action === 'navigate' ? 'selected' : ''}>navigate</option>
-        <option value="waitForElement" \${step.action === 'waitForElement' ? 'selected' : ''}>waitForElement</option>
-        <option value="waitForNavigation" \${step.action === 'waitForNavigation' ? 'selected' : ''}>waitForNavigation</option>
-        <option value="wait" \${step.action === 'wait' ? 'selected' : ''}>wait</option>
-        <option value="fill" \${step.action === 'fill' ? 'selected' : ''}>fill</option>
-        <option value="click" \${step.action === 'click' ? 'selected' : ''}>click</option>
-        <option value="check" \${step.action === 'check' ? 'selected' : ''}>check</option>
-        <option value="select" \${step.action === 'select' ? 'selected' : ''}>select</option>
-        <option value="executeScript" \${step.action === 'executeScript' ? 'selected' : ''}>executeScript</option>
-        <option value="dismissPopups" \${step.action === 'dismissPopups' ? 'selected' : ''}>dismissPopups</option>
-        <option value="keypress" \${step.action === 'keypress' ? 'selected' : ''}>keypress</option>
+        <option value="navigate" ${step.action === 'navigate' ? 'selected' : ''}>navigate</option>
+        <option value="waitForElement" ${step.action === 'waitForElement' ? 'selected' : ''}>waitForElement</option>
+        <option value="waitForNavigation" ${step.action === 'waitForNavigation' ? 'selected' : ''}>waitForNavigation</option>
+        <option value="wait" ${step.action === 'wait' ? 'selected' : ''}>wait</option>
+        <option value="fill" ${step.action === 'fill' ? 'selected' : ''}>fill</option>
+        <option value="click" ${step.action === 'click' ? 'selected' : ''}>click</option>
+        <option value="clickText" ${step.action === 'clickText' ? 'selected' : ''}>clickText</option>
+        <option value="clickPosition" ${step.action === 'clickPosition' ? 'selected' : ''}>clickPosition</option>
+        <option value="check" ${step.action === 'check' ? 'selected' : ''}>check</option>
+        <option value="select" ${step.action === 'select' ? 'selected' : ''}>select</option>
+        <option value="executeScript" ${step.action === 'executeScript' ? 'selected' : ''}>executeScript</option>
+        <option value="dismissPopups" ${step.action === 'dismissPopups' ? 'selected' : ''}>dismissPopups</option>
+        <option value="keypress" ${step.action === 'keypress' ? 'selected' : ''}>keypress</option>
       </select>
       <div class="macro-step-fields"></div>
       <button class="macro-step-remove" title="Remove step">&times;</button>
-    \`;
+    `;
+
+    // Drag & drop reordering
+    stepEl.setAttribute('draggable', 'true');
+    stepEl.dataset.stepIdx = idx;
+
+    stepEl.querySelector('.macro-step-num').addEventListener('mousedown', () => {
+      stepEl.classList.add('macro-step-dragging-ready');
+    });
+
+    stepEl.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(idx));
+      stepEl.classList.add('macro-step-dragging');
+      setTimeout(() => stepEl.style.opacity = '0.4', 0);
+    });
+
+    stepEl.addEventListener('dragend', () => {
+      stepEl.style.opacity = '';
+      stepEl.classList.remove('macro-step-dragging', 'macro-step-dragging-ready');
+      macroStepsContainer.querySelectorAll('.macro-step-drop-above, .macro-step-drop-below').forEach(el => {
+        el.classList.remove('macro-step-drop-above', 'macro-step-drop-below');
+      });
+    });
+
+    stepEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = stepEl.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      stepEl.classList.toggle('macro-step-drop-above', e.clientY < mid);
+      stepEl.classList.toggle('macro-step-drop-below', e.clientY >= mid);
+    });
+
+    stepEl.addEventListener('dragleave', () => {
+      stepEl.classList.remove('macro-step-drop-above', 'macro-step-drop-below');
+    });
+
+    stepEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+      const rect = stepEl.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      let toIdx = parseInt(stepEl.dataset.stepIdx);
+      if (e.clientY >= mid) toIdx++;
+      if (fromIdx < toIdx) toIdx--;
+      if (fromIdx !== toIdx) {
+        const [moved] = _editingMacro.steps.splice(fromIdx, 1);
+        _editingMacro.steps.splice(toIdx, 0, moved);
+        renderMacroSteps();
+      }
+    });
 
     const actionSelect = stepEl.querySelector('.macro-step-action');
     actionSelect.addEventListener('change', () => {
@@ -1513,6 +1605,14 @@ function renderStepFields(step, container) {
     case 'click':
       makeInput('selector', 'CSS Selector', 'text');
       break;
+    case 'clickText':
+      makeInput('text', 'Button text (e.g. Zum Postfach)', 'text');
+      makeInput('tag', 'Element filter (optional, e.g. a, button)', 'text');
+      break;
+    case 'clickPosition':
+      makeInput('x', 'X position (px)', 'number');
+      makeInput('y', 'Y position (px)', 'number');
+      break;
     case 'check':
       makeInput('selector', 'CSS Selector', 'text');
       break;
@@ -1548,21 +1648,28 @@ if (macroEditorCancelBtn) {
   macroEditorCancelBtn.addEventListener('click', closeMacroEditor);
 }
 
+let _savingMacro = false;
 if (macroEditorSaveBtn) {
   macroEditorSaveBtn.addEventListener('click', async () => {
-    if (!_editingMacro) return;
-    _editingMacro.name = macroNameInput.value.trim() || 'Untitled Macro';
-    _editingMacro.icon = macroIconInput.value.trim() || '>';
-    const allMacros = await window.slime.macros.get();
-    const idx = allMacros.findIndex(m => m.id === _editingMacro.id);
-    if (idx >= 0) {
-      allMacros[idx] = _editingMacro;
-    } else {
-      allMacros.push(_editingMacro);
+    if (_savingMacro) return;
+    _savingMacro = true;
+    try {
+      if (!_editingMacro) return;
+      _editingMacro.name = macroNameInput.value.trim() || 'Untitled Macro';
+      _editingMacro.icon = macroIconInput.value.trim() || '>';
+      const allMacros = await window.slime.macros.get();
+      const idx = allMacros.findIndex(m => m.id === _editingMacro.id);
+      if (idx >= 0) {
+        allMacros[idx] = _editingMacro;
+      } else {
+        allMacros.push(_editingMacro);
+      }
+      await window.slime.macros.save(allMacros);
+      closeMacroEditor();
+      loadMacrosPanel();
+    } finally {
+      _savingMacro = false;
     }
-    await window.slime.macros.save(allMacros);
-    closeMacroEditor();
-    loadMacrosPanel();
   });
 }
 
@@ -1597,6 +1704,7 @@ function closeAllPanels() {
   downloadsPanel.style.display = 'none';
   passwordsPanel.style.display = 'none';
   if (macrosPanel) macrosPanel.style.display = 'none';
+  hideSettings();
 }
 
 // ==========================================
@@ -1717,7 +1825,8 @@ function escapeHtml(str) {
 // ==========================================
 
 async function init() {
-  // Load settings first
+  // Load webview preload path and settings
+  webviewPreloadPath = await window.slime.getWebviewPreloadPath();
   await loadSettings();
 
   // Determine what to open

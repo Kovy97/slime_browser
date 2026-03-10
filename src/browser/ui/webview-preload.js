@@ -10,13 +10,46 @@ window.addEventListener('DOMContentLoaded', () => {
     window.Notification.requestPermission = () => Promise.resolve('denied');
   }
 
-  // Block clipboard hijacking
-  document.addEventListener('copy', (e) => e.stopImmediatePropagation(), true);
+  // Block programmatic clipboard hijacking but allow user-initiated copies
+  document.addEventListener('copy', (e) => {
+    if (!e.isTrusted) e.stopImmediatePropagation();
+  }, true);
+
+  // =========================================================================
+  // Cosmetic ad filtering — hide known ad elements via CSS
+  // Only target highly specific selectors to avoid breaking page layouts
+  // =========================================================================
+  const adCSS = document.createElement('style');
+  adCSS.textContent = `
+    /* Google Ads */
+    ins.adsbygoogle,
+    div[id^="div-gpt-ad"],
+    [id*="google_ads_iframe"],
+    [data-google-query-id],
+    iframe[src*="doubleclick.net"],
+    iframe[src*="googlesyndication.com"],
+    /* Specific ad frameworks */
+    .adsbygoogle,
+    .ad-placeholder,
+    .sponsored-content,
+    .sponsored-ad,
+    [id*="InterRedAd"],
+    [class*="InterRedAd"]
+    {
+      display: none !important;
+      height: 0 !important;
+      min-height: 0 !important;
+      overflow: hidden !important;
+    }
+  `;
+  (document.head || document.documentElement).appendChild(adCSS);
 });
 
 // Prevent anti-adblock detection
-Object.defineProperty(document, 'hidden', { get: () => false });
-Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+try {
+  Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+  Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+} catch (e) { /* property may already be defined */ }
 
 // =============================================================================
 // Cookie Consent & Popup Auto-Dismiss System
@@ -59,13 +92,13 @@ Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
 
     // ---- Selectors for general popups ----
     const POPUP_SELECTORS = [
-      '[class*="newsletter" i]', '[id*="newsletter" i]',
-      '[class*="subscribe" i]', '[id*="subscribe" i]',
-      '[class*="popup" i]', '[id*="popup" i]',
-      '[class*="modal" i]', '[id*="modal" i]',
-      '[class*="adblock" i]', '[id*="adblock" i]',
-      '[class*="ad-block" i]', '[id*="ad-block" i]',
-      '[class*="adb-message" i]', '[id*="adb-message" i]'
+      '[class*="newsletter-popup" i]', '[id*="newsletter-popup" i]',
+      '[class*="newsletter-overlay" i]', '[id*="newsletter-overlay" i]',
+      '[class*="subscribe-popup" i]', '[id*="subscribe-popup" i]',
+      '[class*="adblock-notice" i]', '[id*="adblock-notice" i]',
+      '[class*="adblock-overlay" i]', '[id*="adblock-overlay" i]',
+      '[class*="adb-message" i]', '[id*="adb-message" i]',
+      '[class*="anti-adblock" i]', '[id*="anti-adblock" i]'
     ].join(',');
 
     // =========================================================================
@@ -124,26 +157,28 @@ Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
         document.body.classList.remove('modal-open');
       }
       const bodyStyle = document.body.style;
-      if (bodyStyle.overflow === 'hidden') {
-        bodyStyle.overflow = 'auto';
-      }
+      if (bodyStyle.overflow === 'hidden') bodyStyle.overflow = '';
       const htmlStyle = document.documentElement.style;
-      if (htmlStyle.overflow === 'hidden') {
-        htmlStyle.overflow = 'auto';
-      }
+      if (htmlStyle.overflow === 'hidden') htmlStyle.overflow = '';
 
-      // Find and hide fixed/sticky overlays with high z-index covering viewport
-      const allEls = document.querySelectorAll('div, section, aside');
+      // Only hide overlay backdrops (semi-transparent full-screen covers)
+      const allEls = document.querySelectorAll('div');
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       for (const el of allEls) {
         const style = getComputedStyle(el);
-        const pos = style.position;
-        if (pos !== 'fixed' && pos !== 'sticky') continue;
+        if (style.position !== 'fixed') continue;
         const z = parseInt(style.zIndex, 10);
         if (isNaN(z) || z <= 999) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.width >= vw * 0.5 && rect.height >= vh * 0.5) {
+        if (rect.width < vw * 0.8 || rect.height < vh * 0.8) continue;
+        // Only target backdrop-like elements (semi-transparent or no visible content)
+        const bg = style.backgroundColor;
+        const opacity = parseFloat(style.opacity);
+        const rgbaMatch = bg.match(/rgba?\([\d\s,]+,\s*([\d.]+)\)/);
+        const bgAlpha = rgbaMatch ? parseFloat(rgbaMatch[1]) : 1;
+        const isBackdrop = bgAlpha < 0.95 || opacity < 0.95;
+        if (isBackdrop && el.children.length <= 1) {
           el.style.setProperty('display', 'none', 'important');
         }
       }
@@ -172,9 +207,8 @@ Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
     // =========================================================================
     function runAllDismiss() {
       try {
-        if (!tryClickButtons()) {
-          hideBanners();
-        }
+        tryClickButtons();
+        hideBanners();
         removeOverlays();
         dismissPopups();
       } catch (e) { /* never break the page */ }

@@ -1387,43 +1387,12 @@ body.sidebar-pinned #main {
   border-color: var(--accent);
 }
 
-/* ==========================================
-   Macro Step Items (Editor)
-   ========================================== */
-
-.macro-step-item {
-  background: #0c0c1a;
-  border: 1px solid #2a2a4a;
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  margin-bottom: 8px;
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
+.macro-step-drop-above {
+  border-top: 2px solid #4ade80 !important;
 }
 
-.macro-step-item select {
-  background: #1a1a2e;
-  border: 1px solid #2a2a4a;
-  border-radius: 6px;
-  color: var(--text-primary);
-  padding: 6px 8px;
-  font-size: 13px;
-  font-family: inherit;
-  min-width: 140px;
-  outline: none;
-}
-
-.macro-step-item input {
-  background: #1a1a2e;
-  border: 1px solid #2a2a4a;
-  border-radius: 6px;
-  color: var(--text-primary);
-  padding: 6px 8px;
-  font-size: 13px;
-  font-family: inherit;
-  flex: 1;
-  outline: none;
+.macro-step-drop-below {
+  border-bottom: 2px solid #4ade80 !important;
 }
 
 .macro-step-remove {
@@ -1431,8 +1400,8 @@ body.sidebar-pinned #main {
   border: none;
   color: #ff6b6b;
   cursor: pointer;
-  font-size: 16px;
-  padding: 4px;
+  font-size: 14px;
+  padding: 2px 4px;
   line-height: 1;
 }
 
@@ -1596,6 +1565,11 @@ body.sidebar-pinned #main {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   margin-bottom: 6px;
+  cursor: grab;
+}
+
+.macro-step-row:active {
+  cursor: grabbing;
 }
 
 .macro-step-num {
@@ -1611,6 +1585,7 @@ body.sidebar-pinned #main {
   font-weight: 600;
   flex-shrink: 0;
   margin-top: 4px;
+  cursor: grab;
 }
 
 .macro-step-fields {

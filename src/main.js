@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { setupAdblocker } = require('./adblocker/engine');
@@ -99,6 +99,7 @@ ipcMain.handle('history-add', (_, entry) => {
   history.unshift({ ...entry, timestamp: Date.now() });
   if (history.length > 5000) history.length = 5000;
   writeJSON('history.json', history);
+  return true;
 });
 
 ipcMain.handle('history-get', (_, query) => {
@@ -111,7 +112,10 @@ ipcMain.handle('history-get', (_, query) => {
   ).slice(0, 200);
 });
 
-ipcMain.handle('history-clear', () => writeJSON('history.json', []));
+ipcMain.handle('history-clear', () => {
+  writeJSON('history.json', []);
+  return true;
+});
 
 // ==========================================
 // Bookmarks
@@ -138,20 +142,47 @@ ipcMain.handle('bookmarks-check', (_, url) => {
 });
 
 // ==========================================
-// Passwords (encrypted with simple obfuscation)
+// Password encryption helpers (encrypted with Electron safeStorage)
 // ==========================================
 
-ipcMain.handle('passwords-get', () => readJSON('passwords.json', []));
+function encryptPassword(password) {
+  if (safeStorage.isEncryptionAvailable()) {
+    return safeStorage.encryptString(password).toString('base64');
+  }
+  return password; // fallback to plain if encryption unavailable
+}
+
+function decryptPassword(encrypted) {
+  if (safeStorage.isEncryptionAvailable()) {
+    try {
+      return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+    } catch (e) {
+      return encrypted; // fallback if decryption fails (old plaintext entry)
+    }
+  }
+  return encrypted;
+}
+
+// ==========================================
+// Passwords (encrypted with Electron safeStorage)
+// ==========================================
+
+ipcMain.handle('passwords-get', () => {
+  const passwords = readJSON('passwords.json', []);
+  return passwords.map(p => ({ ...p, password: decryptPassword(p.password) }));
+});
 
 ipcMain.handle('passwords-save', (_, entry) => {
   const passwords = readJSON('passwords.json', []);
+  const encryptedEntry = { ...entry, password: encryptPassword(entry.password) };
   const idx = passwords.findIndex(p => p.url === entry.url && p.username === entry.username);
   if (idx >= 0) {
-    passwords[idx] = { ...entry, updatedAt: Date.now() };
+    passwords[idx] = { ...encryptedEntry, updatedAt: Date.now() };
   } else {
-    passwords.unshift({ ...entry, createdAt: Date.now() });
+    passwords.unshift({ ...encryptedEntry, createdAt: Date.now() });
   }
   writeJSON('passwords.json', passwords);
+  return true;
 });
 
 ipcMain.handle('passwords-remove', (_, { url, username }) => {
@@ -168,7 +199,7 @@ ipcMain.handle('passwords-find', (_, url) => {
     const host = new URL(url).hostname;
     return passwords.filter(p => {
       try { return new URL(p.url).hostname === host; } catch(e) { return false; }
-    });
+    }).map(p => ({ ...p, password: decryptPassword(p.password) }));
   } catch (e) {
     return [];
   }
@@ -182,6 +213,11 @@ ipcMain.handle('macros-get', () => readJSON('macros.json', []));
 ipcMain.handle('macros-save', (_, macros) => {
   writeJSON('macros.json', macros);
   return macros;
+});
+
+// Paths
+ipcMain.handle('get-webview-preload-path', () => {
+  return path.join(__dirname, 'browser', 'ui', 'webview-preload.js');
 });
 
 // ==========================================
@@ -242,8 +278,14 @@ ipcMain.on('increment-blocked', () => {
 ipcMain.handle('get-youtube-script', () => getYouTubeScript());
 
 // Download management
-ipcMain.handle('download-open', (_, filePath) => shell.openPath(filePath));
-ipcMain.handle('download-show', (_, filePath) => shell.showItemInFolder(filePath));
+ipcMain.handle('download-open', (_, filePath) => {
+  if (!filePath || typeof filePath !== 'string') return;
+  return shell.openPath(path.resolve(filePath));
+});
+ipcMain.handle('download-show', (_, filePath) => {
+  if (!filePath || typeof filePath !== 'string') return;
+  return shell.showItemInFolder(path.resolve(filePath));
+});
 
 // ==========================================
 // App Lifecycle
