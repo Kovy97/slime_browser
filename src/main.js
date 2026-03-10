@@ -588,17 +588,20 @@ function isNewerVersion(latest, current) {
 }
 
 function checkForAsarUpdate() {
+  console.log('[Slime Updater] Checking for updates... (current: ' + pkg.version + ')');
   const request = net.request('https://api.github.com/repos/Kovy97/slime_browser/releases/latest');
   request.setHeader('Accept', 'application/vnd.github+json');
   request.setHeader('User-Agent', 'SlimeBrowser');
 
   let body = '';
   request.on('response', (response) => {
+    console.log('[Slime Updater] GitHub API response:', response.statusCode);
     response.on('data', (chunk) => { body += chunk.toString(); });
     response.on('end', () => {
       try {
         const release = JSON.parse(body);
         const latest = release.tag_name?.replace(/^v/, '');
+        console.log('[Slime Updater] Latest version:', latest, '| Current:', pkg.version, '| Newer:', latest ? isNewerVersion(latest, pkg.version) : 'N/A');
         if (!latest || !isNewerVersion(latest, pkg.version)) return;
 
         const asarAsset = release.assets?.find(a => a.name === 'app.asar');
