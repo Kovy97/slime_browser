@@ -1,0 +1,15 @@
+{
+  "name": "slime-browser",
+  "version": "1.0.0",
+  "description": "Slime Browser - A Chromium-based browser with built-in adblock and YouTube tools",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "author": "MaSc",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

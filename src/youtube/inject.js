@@ -1,0 +1,417 @@
+/**
+ * Slime Browser - YouTube Tools v4
+ *
+ * Ad bypass strategy (optimized for speed):
+ *   1. Intercept player API → strip all ad config → ads never get scheduled
+ *   2. Fallback: Ad detected → extract video ID → reload video directly via
+ *      YouTube's internal API (skips the entire ad pipeline instantly)
+ */
+
+const YOUTUBE_TOOLS_CSS = `
+  /* Hide ad overlay/banner elements */
+  #player-ads, #masthead-ad, ytd-ad-slot-renderer,
+  ytd-banner-promo-renderer, ytd-video-masthead-ad-v3-renderer,
+  ytd-in-feed-ad-layout-renderer, .ytp-ad-overlay-container,
+  .ytp-ad-text-overlay, #sponsor-card, .ytd-mealbar-promo-renderer,
+  tp-yt-paper-dialog.ytd-popup-container,
+  ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"],
+  .ytp-ad-skip-button-container, .ytp-ad-preview-container,
+  .ytp-ad-message-container, .video-ads,
+  ytd-promoted-sparkles-web-renderer, ytd-promoted-video-renderer,
+  ytd-compact-promoted-video-renderer, .sparkles-light-cta,
+  ytd-player-legacy-desktop-watch-ads-renderer,
+  ytd-display-ad-renderer, ytd-rich-item-renderer:has(ytd-display-ad-renderer),
+  .ytp-ad-action-interstitial, .ytp-ad-image-overlay,
+  .ytp-ad-overlay-ad-info-button-container {
+    display: none !important;
+  }
+
+  /* Slime YouTube toolbar */
+  #slime-yt-toolbar {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 99999;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-family: 'Segoe UI', sans-serif;
+  }
+
+  .slime-yt-btn {
+    background: #1a1a2e;
+    color: #4ade80;
+    border: 1px solid #4ade80;
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .slime-yt-btn:hover {
+    background: #4ade80;
+    color: #1a1a2e;
+  }
+`;
+
+const YOUTUBE_TOOLS_SCRIPT = `
+(function() {
+  if (window.__slimeYTLoaded) return;
+  window.__slimeYTLoaded = true;
+
+  const style = document.createElement('style');
+  style.textContent = ${JSON.stringify(YOUTUBE_TOOLS_CSS)};
+  document.head.appendChild(style);
+
+  let userSpeed = 1.0;
+  let isReloadingVideo = false;
+
+  // ===========================================
+  // HELPER: Get video ID from URL
+  // ===========================================
+
+  function getVideoId() {
+    const params = new URLSearchParams(location.search);
+    return params.get('v');
+  }
+
+  function getTimestamp() {
+    const params = new URLSearchParams(location.search);
+    const t = params.get('t');
+    return t ? parseInt(t) : 0;
+  }
+
+  // ===========================================
+  // STRATEGY 1: Strip ads from player API response
+  // ===========================================
+
+  function stripAdsFromPlayerData(data) {
+    if (!data || typeof data !== 'object') return data;
+
+    const adKeys = [
+      'adPlacements', 'adSlots', 'playerAds', 'adParams',
+      'adBreakParams', 'adBreakHeartbeatParams', 'adSafetyReason',
+    ];
+    adKeys.forEach(key => delete data[key]);
+
+    if (data.playerConfig) {
+      delete data.playerConfig.adRequestConfig;
+      delete data.playerConfig.adsRequestConfig;
+    }
+
+    if (data.playbackTracking) {
+      delete data.playbackTracking.ptrackingUrl;
+      delete data.playbackTracking.qoeUrl;
+      delete data.playbackTracking.atrUrl;
+    }
+
+    return data;
+  }
+
+  const origFetch = window.fetch;
+  window.fetch = function(...args) {
+    const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+
+    // Block ad telemetry
+    if (url.includes('/ptracking') ||
+        url.includes('/get_midroll_') ||
+        url.includes('play.google.com/log') ||
+        url.includes('/pagead/')) {
+      return Promise.resolve(new Response('', { status: 204 }));
+    }
+
+    // Intercept player API → strip ad config
+    if (url.includes('/youtubei/v1/player')) {
+      return origFetch.apply(this, args).then(async (response) => {
+        try {
+          const text = await response.text();
+          let data = JSON.parse(text);
+          data = stripAdsFromPlayerData(data);
+          return new Response(JSON.stringify(data), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        } catch(e) {
+          return origFetch.apply(this, args);
+        }
+      });
+    }
+
+    return origFetch.apply(this, args);
+  };
+
+  // XHR override
+  const origXHROpen = XMLHttpRequest.prototype.open;
+  const origXHRSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    this._slimeUrl = url;
+    return origXHROpen.call(this, method, url, ...rest);
+  };
+
+  XMLHttpRequest.prototype.send = function(...args) {
+    if (this._slimeUrl && typeof this._slimeUrl === 'string') {
+      if (this._slimeUrl.includes('/ptracking') ||
+          this._slimeUrl.includes('/get_midroll_') ||
+          this._slimeUrl.includes('/pagead/')) {
+        Object.defineProperty(this, 'readyState', { value: 4 });
+        Object.defineProperty(this, 'status', { value: 204 });
+        Object.defineProperty(this, 'responseText', { value: '' });
+        this.dispatchEvent(new Event('readystatechange'));
+        this.dispatchEvent(new Event('load'));
+        return;
+      }
+
+      if (this._slimeUrl.includes('/youtubei/v1/player')) {
+        this.addEventListener('load', function() {
+          try {
+            let data = JSON.parse(this.responseText);
+            data = stripAdsFromPlayerData(data);
+            Object.defineProperty(this, 'responseText', { value: JSON.stringify(data) });
+            Object.defineProperty(this, 'response', { value: JSON.stringify(data) });
+          } catch(e) {}
+        });
+      }
+    }
+    return origXHRSend.apply(this, args);
+  };
+
+  // ===========================================
+  // STRATEGY 2: Instant ad bypass via video reload
+  // When ad is detected, force-load the real video immediately
+  // ===========================================
+
+  function bypassAd() {
+    const player = document.querySelector('#movie_player');
+    if (!player) return;
+
+    const isAd = player.classList.contains('ad-showing') ||
+                 player.classList.contains('ad-interrupting');
+    if (!isAd) return;
+    if (isReloadingVideo) return;
+
+    const videoId = getVideoId();
+    if (!videoId) return;
+
+    isReloadingVideo = true;
+
+    // Method 1: Use YouTube's internal player API to directly load the video
+    // This completely bypasses the ad pipeline
+    try {
+      if (typeof player.loadVideoById === 'function') {
+        const startTime = getTimestamp();
+        player.loadVideoById(videoId, startTime);
+        console.log('[Slime] Ad bypassed via loadVideoById:', videoId);
+        setTimeout(() => { isReloadingVideo = false; }, 2000);
+        return;
+      }
+    } catch(e) {}
+
+    // Method 2: Use the CancelPlayback + loadVideoById combo
+    try {
+      if (typeof player.cancelPlayback === 'function') {
+        player.cancelPlayback();
+      }
+      if (typeof player.loadVideoById === 'function') {
+        player.loadVideoById(videoId, getTimestamp());
+        console.log('[Slime] Ad bypassed via cancel+reload:', videoId);
+        setTimeout(() => { isReloadingVideo = false; }, 2000);
+        return;
+      }
+    } catch(e) {}
+
+    // Method 3: Fast-forward fallback (least preferred, but better than nothing)
+    try {
+      const video = document.querySelector('video');
+      if (video && video.duration > 0 && isFinite(video.duration)) {
+        video.currentTime = video.duration;
+        video.muted = true;
+      }
+      // Also click skip button if available
+      const skipBtn = document.querySelector(
+        '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern'
+      );
+      if (skipBtn) skipBtn.click();
+    } catch(e) {}
+
+    setTimeout(() => { isReloadingVideo = false; }, 1000);
+  }
+
+  // MutationObserver: React to ad-showing class instantly
+  function watchForAds() {
+    const player = document.querySelector('#movie_player');
+    if (!player) {
+      setTimeout(watchForAds, 300);
+      return;
+    }
+
+    // Check immediately on load
+    bypassAd();
+
+    const observer = new MutationObserver(() => {
+      bypassAd();
+    });
+
+    observer.observe(player, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+
+    // Also remove ad DOM nodes as they appear
+    const bodyObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (node.tagName === 'YTD-AD-SLOT-RENDERER' ||
+              node.tagName === 'YTD-IN-FEED-AD-LAYOUT-RENDERER' ||
+              node.tagName === 'YTD-PROMOTED-SPARKLES-WEB-RENDERER' ||
+              node.tagName === 'YTD-DISPLAY-AD-RENDERER') {
+            node.remove();
+          }
+        }
+      }
+    });
+
+    bodyObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  watchForAds();
+
+  // Backup polling (less frequent since MutationObserver handles most cases)
+  setInterval(bypassAd, 500);
+
+  // ===========================================
+  // PLAYER TOOLS
+  // ===========================================
+
+  function setSpeed(speed) {
+    const video = document.querySelector('video');
+    if (video) {
+      video.playbackRate = speed;
+      userSpeed = speed;
+      showNotification('Speed: ' + speed + 'x');
+    }
+  }
+
+  function takeScreenshot() {
+    const video = document.querySelector('video');
+    if (!video) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const link = document.createElement('a');
+    link.download = 'slime-screenshot-' + Date.now() + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    showNotification('Screenshot saved!');
+  }
+
+  function togglePiP() {
+    const video = document.querySelector('video');
+    if (!video) return;
+    if (document.pictureInPictureElement) {
+      document.exitPictureInPicture();
+    } else {
+      video.requestPictureInPicture();
+    }
+  }
+
+  let loopStart = null, loopEnd = null, loopInterval = null;
+  function toggleLoop() {
+    const video = document.querySelector('video');
+    if (!video) return;
+    if (loopInterval) {
+      clearInterval(loopInterval);
+      loopInterval = null; loopStart = null; loopEnd = null;
+      showNotification('Loop disabled');
+      return;
+    }
+    if (!loopStart) {
+      loopStart = video.currentTime;
+      showNotification('Loop start: ' + formatTime(loopStart));
+    } else {
+      loopEnd = video.currentTime;
+      showNotification('Looping ' + formatTime(loopStart) + ' - ' + formatTime(loopEnd));
+      loopInterval = setInterval(() => {
+        if (video.currentTime >= loopEnd) video.currentTime = loopStart;
+      }, 100);
+    }
+  }
+
+  function showNotification(text) {
+    let notif = document.getElementById('slime-notif');
+    if (!notif) {
+      notif = document.createElement('div');
+      notif.id = 'slime-notif';
+      notif.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:999999;background:#1a1a2e;color:#4ade80;padding:10px 20px;border-radius:8px;border:1px solid #4ade80;font-family:Segoe UI,sans-serif;font-size:14px;font-weight:600;transition:opacity 0.3s;pointer-events:none;';
+      document.body.appendChild(notif);
+    }
+    notif.textContent = text;
+    notif.style.opacity = '1';
+    clearTimeout(notif._timeout);
+    notif._timeout = setTimeout(() => { notif.style.opacity = '0'; }, 2000);
+  }
+
+  function formatTime(s) {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+
+  function createToolbar() {
+    if (document.getElementById('slime-yt-toolbar')) return;
+    const toolbar = document.createElement('div');
+    toolbar.id = 'slime-yt-toolbar';
+    [
+      { label: '0.5x', action: () => setSpeed(0.5) },
+      { label: '1x', action: () => setSpeed(1.0) },
+      { label: '1.5x', action: () => setSpeed(1.5) },
+      { label: '2x', action: () => setSpeed(2.0) },
+      { label: '3x', action: () => setSpeed(3.0) },
+      { label: 'Screenshot', action: takeScreenshot },
+      { label: 'PiP', action: togglePiP },
+      { label: 'Loop', action: toggleLoop },
+    ].forEach(({ label, action }) => {
+      const btn = document.createElement('button');
+      btn.className = 'slime-yt-btn';
+      btn.textContent = label;
+      btn.addEventListener('click', action);
+      toolbar.appendChild(btn);
+    });
+    document.body.appendChild(toolbar);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+    switch(e.key) {
+      case 's': takeScreenshot(); break;
+      case 'p': if (e.altKey) togglePiP(); break;
+      case 'l': if (e.altKey) toggleLoop(); break;
+    }
+  });
+
+  const pageObserver = new MutationObserver(() => {
+    if (location.pathname === '/watch') {
+      createToolbar();
+    } else {
+      const tb = document.getElementById('slime-yt-toolbar');
+      if (tb) tb.remove();
+    }
+  });
+  pageObserver.observe(document.body, { childList: true, subtree: true });
+  if (location.pathname === '/watch') createToolbar();
+
+  console.log('[Slime Browser] YouTube Tools v4 loaded');
+})();
+`;
+
+function getYouTubeScript() {
+  return YOUTUBE_TOOLS_SCRIPT;
+}
+
+module.exports = { getYouTubeScript };

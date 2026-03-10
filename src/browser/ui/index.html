@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slime Browser</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <!-- Sidebar Header -->
+    <div id="sidebar-header">
+      <div class="logo-icon">S</div>
+      <span class="logo-text">Slime</span>
+    </div>
+
+    <!-- URL Bar in Sidebar -->
+    <div id="sidebar-nav">
+      <div id="nav-buttons">
+        <button class="nav-btn" id="btn-back" title="Back" disabled>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="nav-btn" id="btn-forward" title="Forward" disabled>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="nav-btn" id="btn-reload" title="Reload">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 8a5.5 5.5 0 1 1 1.3 3.5M2.5 14v-3h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div id="url-bar-container">
+        <input type="text" id="url-bar" placeholder="Search or enter URL..." spellcheck="false" autocomplete="off">
+      </div>
+    </div>
+
+    <!-- Vertical Tabs -->
+    <div id="tabs-container"></div>
+
+    <!-- Sidebar Footer -->
+    <div id="sidebar-footer">
+      <button id="new-tab-btn" class="sidebar-btn" title="New Tab (Ctrl+T)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span class="sidebar-btn-label">New Tab</span>
+      </button>
+      <div id="blocked-counter" title="Ads blocked">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4v4.5c0 3.5 2.5 5.5 6 6.5 3.5-1 6-3 6-6.5V4L8 1.5z" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+        <span id="blocked-count">0</span>
+      </div>
+      <button class="sidebar-btn" id="btn-settings" title="Settings">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.9 2.9l1.4 1.4M11.7 11.7l1.4 1.4M13.1 2.9l-1.4 1.4M4.3 11.7l-1.4 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        <span class="sidebar-btn-label">Settings</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Content Area -->
+  <div id="main">
+    <!-- Titlebar (slim, just for dragging + window controls) -->
+    <div id="titlebar">
+      <div id="titlebar-drag"></div>
+      <div id="window-controls">
+        <button class="win-btn" id="btn-minimize" title="Minimize">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+        <button class="win-btn" id="btn-maximize" title="Maximize">
+          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+        </button>
+        <button class="win-btn win-btn-close" id="btn-close" title="Close">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Webview Container -->
+    <div id="webview-container"></div>
+
+    <!-- New Tab Page -->
+    <div id="new-tab-page" style="display: none;">
+      <div class="ntp-content">
+        <div class="ntp-logo-wrap">
+          <div class="ntp-logo">S</div>
+        </div>
+        <p class="ntp-subtitle">What do you want to explore?</p>
+        <div class="ntp-search">
+          <input type="text" id="ntp-search-input" placeholder="Search the web..." autofocus>
+        </div>
+        <div class="ntp-shortcuts" id="ntp-shortcuts">
+          <a class="ntp-shortcut" data-url="https://youtube.com">
+            <div class="ntp-shortcut-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.9 31.9 0 0 0 0 12a31.9 31.9 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1c.3-1.9.5-3.8.5-5.8s-.2-3.9-.5-5.8zM9.5 15.6V8.4l6.3 3.6-6.3 3.6z"/></svg>
+            </div>
+            <span>YouTube</span>
+          </a>
+          <a class="ntp-shortcut" data-url="https://github.com">
+            <div class="ntp-shortcut-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.8-1.3-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.3 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17 4.7 18 5 18 5c.7 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+            </div>
+            <span>GitHub</span>
+          </a>
+          <a class="ntp-shortcut" data-url="https://reddit.com">
+            <div class="ntp-shortcut-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8.5" cy="11" r="1.5"/><circle cx="15.5" cy="11" r="1.5"/><path d="M8.5 15c1 1.2 2.3 1.5 3.5 1.5s2.5-.3 3.5-1.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            </div>
+            <span>Reddit</span>
+          </a>
+          <a class="ntp-shortcut" data-url="https://wikipedia.org">
+            <div class="ntp-shortcut-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12.1 21.3L5.6 7.5h2.1l4.4 10 4.4-10h2.1l-6.5 13.8z"/></svg>
+            </div>
+            <span>Wikipedia</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="browser.js"></script>
+</body>
+</html>
