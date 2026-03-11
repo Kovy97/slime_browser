@@ -232,6 +232,9 @@ async function setupAdblocker(browserSession, onBlocked, chromeInfo) {
 
     // --- Adblocker: remove tracking headers ---
     delete headers['X-Client-Data'];
+    // Remove Electron-specific headers (Cloudflare bot detection)
+    delete headers['X-Electron-Version'];
+    delete headers['X-Chrome-Startup-Flags'];
     headers['DNT'] = '1';
     headers['Sec-GPC'] = '1';
 

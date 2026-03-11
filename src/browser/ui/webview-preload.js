@@ -196,11 +196,8 @@ window.addEventListener('DOMContentLoaded', () => {
   (document.head || document.documentElement).appendChild(adCSS);
 });
 
-// Prevent anti-adblock detection
-try {
-  Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
-  Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
-} catch (e) { /* property may already be defined */ }
+// NOTE: document.hidden/visibilityState overrides removed
+// — Cloudflare detects tampered visibility API as a bot indicator
 
 // =============================================================================
 // Cookie Consent & Popup Auto-Dismiss System

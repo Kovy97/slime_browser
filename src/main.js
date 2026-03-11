@@ -36,8 +36,8 @@ function validateSettings(settings) {
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');  // Enable WebGL on all GPUs
-app.commandLine.appendSwitch('disable-background-networking');
-app.commandLine.appendSwitch('disable-component-update');
+// NOTE: disable-background-networking and disable-component-update removed
+// — they are bot indicators that trigger Cloudflare and Google detection
 
 // Anti-bot detection: remove navigator.webdriver flag
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
