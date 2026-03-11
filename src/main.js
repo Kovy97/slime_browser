@@ -662,10 +662,12 @@ ipcMain.handle('get-blocked-count', () => blockedCount);
 let cachedSlimeMB = Math.round(process.memoryUsage().rss / (1024 * 1024));
 let psFailCount = 0;
 
+const slimeProcessName = path.basename(process.execPath, '.exe');
+
 function refreshSlimeMemory() {
   execFile('powershell.exe', [
     '-NoProfile', '-NoLogo', '-Command',
-    '[math]::Round((Get-Process electron -EA 0 | Measure-Object PM -Sum).Sum / 1MB)'
+    `[math]::Round((Get-Process '${slimeProcessName}' -EA 0 | Measure-Object PM -Sum).Sum / 1MB)`
   ], { timeout: 5000 }, (err, stdout) => {
     if (!err && stdout.trim()) {
       cachedSlimeMB = parseInt(stdout.trim()) || cachedSlimeMB;
