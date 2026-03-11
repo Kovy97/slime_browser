@@ -329,8 +329,13 @@ function renderTab(tab) {
   el.addEventListener('mouseenter', () => {
     if (tab.isNewTab || (tab.url && tab.url.includes('slime://newtab'))) return;
     if (!tab.webview) return;
+    // Don't show preview when sidebar is collapsed (not hovered/pinned)
+    const sb = document.getElementById('sidebar');
+    if (sb && !sb.matches(':hover') && !sb.classList.contains('pinned')) return;
     tabPreviewTimeout = setTimeout(async () => {
       try {
+        // Re-check sidebar state after delay
+        if (sb && !sb.matches(':hover') && !sb.classList.contains('pinned')) return;
         const wcId = tab.webview.getWebContentsId();
         let dataUrl = tabThumbnailCache.get(tab.id);
         if (!dataUrl) {
@@ -339,6 +344,7 @@ function renderTab(tab) {
         }
         if (!dataUrl) return;
         const img = tabPreview.querySelector('img');
+        if (!img) return;
         img.src = dataUrl;
         const rect = el.getBoundingClientRect();
         tabPreview.style.top = rect.top + 'px';
@@ -1634,6 +1640,18 @@ window.addEventListener('beforeunload', () => {
 
 const sidebar = document.getElementById('sidebar');
 const pinBtn = document.getElementById('btn-pin-sidebar');
+
+// Hide tab preview when sidebar collapses
+if (sidebar) {
+  sidebar.addEventListener('mouseleave', () => {
+    if (!sidebar.classList.contains('pinned')) {
+      clearTimeout(tabPreviewTimeout);
+      tabPreviewTimeout = null;
+      tabPreview.style.display = 'none';
+      tabPreview.style.opacity = '0';
+    }
+  });
+}
 
 pinBtn.addEventListener('click', () => {
   const isPinned = sidebar.classList.toggle('pinned');
