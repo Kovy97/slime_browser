@@ -88,7 +88,40 @@ slime-browser/
 ```bash
 npm start       # Launch the browser
 npm run dev     # Launch with --dev flag (for future dev tools toggle)
+npm run build   # Build installer + extract app.asar to dist/
 ```
+
+## Release Workflow (MUST follow for every update)
+
+1. **Make changes** — edit source files in `src/`
+2. **Test locally** — IMPORTANT: delete `node_modules/electron/dist/resources/app.asar` first!
+   Electron loads app.asar over source files if it exists. Without deleting it, you test the OLD code.
+   ```bash
+   rm node_modules/electron/dist/resources/app.asar 2>/dev/null
+   npx electron .
+   ```
+3. **Bump version** in `package.json` (semver: patch for fixes, minor for features)
+4. **Build** — creates installer + extracts `dist/app.asar` for hot-update:
+   ```bash
+   npm run build
+   ```
+5. **Commit & push**:
+   ```bash
+   git add <changed files>   # Never git add -A (may include secrets/binaries)
+   git commit -m "feat/fix/chore: description (vX.Y.Z)"
+   git push origin master
+   ```
+6. **Create GitHub Release** with `dist/app.asar` attached:
+   - Go to https://github.com/Kovy97/slime_browser/releases/new
+   - Tag: `vX.Y.Z`, Title: `vX.Y.Z`
+   - Attach `dist/app.asar` as binary
+   - Publish → installed browsers auto-detect the update
+
+### Common Pitfalls
+- **app.asar in node_modules**: Electron loads `node_modules/electron/dist/resources/app.asar` INSTEAD of source files. Always delete it before dev testing.
+- **Single Instance Lock**: If the installed Slime Browser is running, `npx electron .` won't start a new instance — it sends a message to the existing one. Close the installed browser first.
+- **Forgot GitHub Release**: Pushing code alone does NOT trigger updates. The asar updater checks GitHub Releases for `app.asar` assets.
+- **Only ONE onBeforeSendHeaders per session**: Electron replaces previous handlers. All header modifications must be in `adblocker/engine.js`.
 
 ## Rules
 - NEVER use `require()` in renderer/browser.js — always use `window.slime` API via preload
