@@ -18,6 +18,10 @@ let webviewPreloadPath = null;
 const DEFAULT_URL = 'slime://newtab';
 let SEARCH_ENGINE = 'https://www.google.com/search?q=';
 
+// Tab preview state
+const tabThumbnailCache = new Map();
+let tabPreviewTimeout = null;
+
 const SEARCH_ENGINES = {
   google: 'https://www.google.com/search?q=',
   duckduckgo: 'https://duckduckgo.com/?q=',
@@ -68,7 +72,7 @@ window.slime.onContextAction((data) => {
   const wv = tab.webview;
 
   switch (data.action) {
-    case 'open-link-new-tab': createTab(data.url); break;
+    case 'open-link-new-tab': createTab(data.url, { incognito: tab.isIncognito || false }); break;
     case 'search': navigate(SEARCH_ENGINE + encodeURIComponent(data.text), true); break;
     case 'copy': wv.copy(); break;
     case 'cut': wv.cut(); break;
@@ -109,18 +113,30 @@ const findNext = document.getElementById('find-next');
 const findClose = document.getElementById('find-close');
 
 // ==========================================
+// Tab Preview Tooltip
+// ==========================================
+
+const tabPreview = document.createElement('div');
+tabPreview.id = 'tab-preview';
+tabPreview.innerHTML = '<img />';
+tabPreview.style.display = 'none';
+document.body.appendChild(tabPreview);
+
+// ==========================================
 // Tab Management
 // ==========================================
 
-function createTab(url = DEFAULT_URL) {
+function createTab(url = DEFAULT_URL, options = {}) {
   const id = ++tabIdCounter;
+  const isIncognito = options.incognito === true;
 
   const tab = {
     id,
     url,
-    title: 'New Tab',
+    title: isIncognito ? 'Incognito Tab' : 'New Tab',
     webview: null,
     isNewTab: url === DEFAULT_URL,
+    isIncognito,
   };
 
   if (!tab.isNewTab) {
@@ -162,6 +178,7 @@ function closeTab(id) {
 
   tabs.splice(index, 1);
   tabMap.delete(id);
+  tabThumbnailCache.delete(id);
 
   if (tabs.length === 0) {
     createTab();
@@ -204,10 +221,10 @@ function switchToTab(id) {
 
 function renderTab(tab) {
   const el = document.createElement('div');
-  el.className = 'tab';
+  el.className = 'tab' + (tab.isIncognito ? ' incognito' : '');
   el.dataset.tabId = tab.id;
   el.innerHTML = `
-    <div class="tab-favicon"><span>${escapeHtml(tab.title.charAt(0).toUpperCase())}</span></div>
+    <div class="tab-favicon">${tab.isIncognito ? '<svg class="incognito-tab-icon" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2C5.5 2 3 4 3 4s-1 1.5 0 2c.5.3 1.5.5 2 .5L4 10h8l-1-3.5c.5 0 1.5-.2 2-.5 1-.5 0-2 0-2S10.5 2 8 2z" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="12" r="1.5" stroke="currentColor" stroke-width="1" fill="none"/><circle cx="10" cy="12" r="1.5" stroke="currentColor" stroke-width="1" fill="none"/></svg>' : '<span>' + escapeHtml(tab.title.charAt(0).toUpperCase()) + '</span>'}</div>
     <span class="tab-title">${escapeHtml(tab.title)}</span>
     <button class="tab-mute" title="Mute/Unmute Tab">
       <svg class="mute-icon-on" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 5.5h2.5L8 2.5v11l-3.5-3H2a.5.5 0 0 1-.5-.5V6a.5.5 0 0 1 .5-.5z" fill="currentColor"/><path d="M10.5 5.5a3 3 0 0 1 0 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M12.5 3.5a6 6 0 0 1 0 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
@@ -292,6 +309,36 @@ function renderTab(tab) {
     }
   });
 
+  // --- Tab preview on hover ---
+  el.addEventListener('mouseenter', () => {
+    if (tab.isNewTab || (tab.url && tab.url.includes('slime://newtab'))) return;
+    if (!tab.webview) return;
+    tabPreviewTimeout = setTimeout(async () => {
+      try {
+        const wcId = tab.webview.getWebContentsId();
+        let dataUrl = tabThumbnailCache.get(tab.id);
+        if (!dataUrl) {
+          dataUrl = await window.slime.captureTab(wcId);
+          if (dataUrl) tabThumbnailCache.set(tab.id, dataUrl);
+        }
+        if (!dataUrl) return;
+        const img = tabPreview.querySelector('img');
+        img.src = dataUrl;
+        const rect = el.getBoundingClientRect();
+        tabPreview.style.top = rect.top + 'px';
+        tabPreview.style.left = (rect.right + 8) + 'px';
+        tabPreview.style.display = 'block';
+        tabPreview.style.opacity = '1';
+      } catch (e) { /* ignore */ }
+    }, 300);
+  });
+  el.addEventListener('mouseleave', () => {
+    clearTimeout(tabPreviewTimeout);
+    tabPreviewTimeout = null;
+    tabPreview.style.display = 'none';
+    tabPreview.style.opacity = '0';
+  });
+
   tabsContainer.appendChild(el);
 }
 
@@ -359,9 +406,12 @@ function updateTabUrl(id, url) {
 // ==========================================
 
 function createWebview(tabId, url) {
+  const tab = tabMap.get(tabId);
+  const partition = tab && tab.isIncognito ? 'incognito' : 'persist:slime';
+
   const webview = document.createElement('webview');
   webview.setAttribute('src', url);
-  webview.setAttribute('partition', 'persist:slime');
+  webview.setAttribute('partition', partition);
   webview.setAttribute('autosize', 'on');
   webview.setAttribute('allowpopups', '');
   webview.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes, webgl=yes, enableWebSQL=no');
@@ -370,7 +420,6 @@ function createWebview(tabId, url) {
   }
   webview.dataset.tabId = tabId;
 
-  const tab = tabMap.get(tabId);
   if (tab) {
     tab._listeners = {};
   }
@@ -401,9 +450,12 @@ function createWebview(tabId, url) {
     updateNavButtons();
     updateBookmarkButton();
     injectContentScripts(webview, e.url);
-    // Record in history
+    tabThumbnailCache.delete(tabId);
+    // Record in history (skip incognito tabs)
     const wvTab = tabMap.get(tabId);
-    recordHistory(e.url, wvTab?.title);
+    if (!wvTab?.isIncognito) {
+      recordHistory(e.url, wvTab?.title);
+    }
   };
   webview.addEventListener('did-navigate', _listeners.didNavigate);
 
@@ -455,6 +507,7 @@ function createWebview(tabId, url) {
   setupPasswordCapture(webview, tabId);
 
   // Open links in new tab instead of popup — except auth flows
+  // Propagate incognito status: links opened from incognito tabs stay incognito
   _listeners.newWindow = (e) => {
     e.preventDefault();
     if (!e.url || e.url === 'about:blank') return;
@@ -465,7 +518,7 @@ function createWebview(tabId, url) {
     if (isAuth) {
       webview.loadURL(e.url);
     } else {
-      createTab(e.url);
+      createTab(e.url, { incognito: tab?.isIncognito || false });
     }
   };
   webview.addEventListener('new-window', _listeners.newWindow);
@@ -1129,6 +1182,11 @@ function makeAutofillScript(username, password) {
 }
 
 function checkPasswordAutofill(webview) {
+  // Skip password autofill for incognito tabs
+  const tabId = parseInt(webview.dataset.tabId, 10);
+  const afTab = tabMap.get(tabId);
+  if (afTab?.isIncognito) return;
+
   // Inject capture script
   try {
     webview.executeJavaScript(PASSWORD_CAPTURE_SCRIPT);
@@ -1154,6 +1212,10 @@ function setupPasswordCapture(webview, tabId) {
   // Listen for password captures via console messages
   webview.addEventListener('console-message', (e) => {
     if (e.message && e.message.startsWith('__SLIME_PW__')) {
+      // Skip password save prompts for incognito tabs
+      const pwTab = tabMap.get(tabId);
+      if (pwTab?.isIncognito) return;
+
       try {
         const data = JSON.parse(e.message.substring(12));
         // Check if we already have this exact credential saved
@@ -1358,6 +1420,9 @@ function populateSettingsUI(s) {
   settingCookieDismiss.checked = s.cookieAutoDismiss !== false;
   settingGlass.checked = !!s.glassMorphism;
 
+  // Startup pages
+  renderStartupPages();
+
   // Accent color swatches
   const accent = s.accentColor || '#4ade80';
   settingAccentCustom.value = accent;
@@ -1424,6 +1489,45 @@ settingAdblocker.addEventListener('change', () => saveSetting('adblockerEnabled'
 settingCookieDismiss.addEventListener('change', () => saveSetting('cookieAutoDismiss', settingCookieDismiss.checked));
 settingGlass.addEventListener('change', () => saveSetting('glassMorphism', settingGlass.checked));
 
+// Startup Pages
+const startupPagesList = document.getElementById('startup-pages-list');
+const startupPageInput = document.getElementById('startup-page-input');
+const startupPageAddBtn = document.getElementById('startup-page-add');
+
+function renderStartupPages() {
+  const pages = currentSettings?.startupPages || [];
+  startupPagesList.innerHTML = '';
+  pages.forEach((url, index) => {
+    const item = document.createElement('div');
+    item.className = 'startup-page-item';
+    item.innerHTML = `<span title="${escapeHtml(url)}">${escapeHtml(url)}</span><button class="startup-page-remove" title="Remove">&times;</button>`;
+    item.querySelector('.startup-page-remove').addEventListener('click', () => {
+      const updated = (currentSettings.startupPages || []).filter((_, i) => i !== index);
+      currentSettings.startupPages = updated;
+      saveSetting('startupPages', updated);
+      renderStartupPages();
+    });
+    startupPagesList.appendChild(item);
+  });
+}
+
+startupPageAddBtn.addEventListener('click', () => {
+  let url = startupPageInput.value.trim();
+  if (!url) return;
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  try { new URL(url); } catch (e) { return; }
+  if (!currentSettings.startupPages) currentSettings.startupPages = [];
+  if (currentSettings.startupPages.includes(url)) return;
+  currentSettings.startupPages.push(url);
+  saveSetting('startupPages', currentSettings.startupPages);
+  renderStartupPages();
+  startupPageInput.value = '';
+});
+
+startupPageInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') startupPageAddBtn.click();
+});
+
 // Color swatches
 colorSwatches.forEach(sw => {
   sw.addEventListener('click', () => {
@@ -1471,7 +1575,7 @@ settingBgOpacity.addEventListener('input', () => {
 
 function getSessionData() {
   return tabs
-    .filter(t => !t.isNewTab && t.url)
+    .filter(t => !t.isNewTab && !t.isIncognito && t.url)
     .map(t => ({ url: t.url, title: t.title }));
 }
 
@@ -2152,6 +2256,7 @@ const emailReaderSubject = document.getElementById('email-reader-subject');
 const emailReaderFrom = document.getElementById('email-reader-from');
 const emailReaderDate = document.getElementById('email-reader-date');
 const emailReaderBody = document.getElementById('email-reader-body');
+const emailReaderAttachments = document.getElementById('email-reader-attachments');
 const emailReaderBack = document.getElementById('email-reader-back');
 const emailReplyBtn = document.getElementById('email-reply-btn');
 const emailDeleteBtn = document.getElementById('email-delete-btn');
@@ -2270,7 +2375,7 @@ async function loadEmailFolders(accountId) {
   });
 }
 
-async function loadEmailMessages(accountId, folder, page = 1) {
+async function loadEmailMessages(accountId, folder, page = 0) {
   emailList.innerHTML = '<div class="panel-empty">Loading...</div>';
   emailReader.style.display = 'none';
   emailList.style.display = '';
@@ -2327,6 +2432,43 @@ async function openEmailMessage(accountId, folder, uid) {
       emailReaderBody.innerHTML = sanitizeEmailHtml(msg.html);
     } else {
       emailReaderBody.textContent = msg.text || '';
+    }
+
+    // Render attachments
+    if (msg.attachments && msg.attachments.length > 0) {
+      emailReaderAttachments.style.display = '';
+      emailReaderAttachments.innerHTML = '<div class="email-attachment-list">' +
+        '<div class="email-attachment-header">Attachments (' + msg.attachments.length + ')</div>' +
+        msg.attachments.map(att => {
+          const sizeStr = formatAttachmentSize(att.size);
+          return '<div class="email-attachment-item">' +
+            '<svg class="email-attachment-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1v10M8 1L5 4M8 1l3 3M3 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+            '<span class="email-attachment-name">' + escapeHtml(att.filename) + '</span>' +
+            '<span class="email-attachment-size">' + escapeHtml(sizeStr) + '</span>' +
+            '<button class="email-attachment-download" data-index="' + att.index + '" title="Download">Download</button>' +
+          '</div>';
+        }).join('') +
+      '</div>';
+
+      // Attach click handlers for download buttons
+      emailReaderAttachments.querySelectorAll('.email-attachment-download').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const idx = parseInt(btn.dataset.index, 10);
+          btn.textContent = 'Saving...';
+          btn.disabled = true;
+          try {
+            await window.slime.emailAttachmentDownload(accountId, folder, uid, idx);
+            btn.textContent = 'Saved!';
+            setTimeout(() => { btn.textContent = 'Download'; btn.disabled = false; }, 2000);
+          } catch (e) {
+            btn.textContent = 'Failed';
+            setTimeout(() => { btn.textContent = 'Download'; btn.disabled = false; }, 2000);
+          }
+        });
+      });
+    } else {
+      emailReaderAttachments.style.display = 'none';
+      emailReaderAttachments.innerHTML = '';
     }
 
     // Store current message info for reply/delete
@@ -2595,6 +2737,171 @@ if (window.slime.onEmailNewMessage) {
 }
 
 // ==========================================
+// Notes Panel
+// ==========================================
+
+const notesPanel = document.getElementById('notes-panel');
+const notesCloseBtn = document.getElementById('notes-close');
+const notesBtn = document.getElementById('btn-notes');
+const notesAddBtn = document.getElementById('notes-add-btn');
+const notesSearch = document.getElementById('notes-search');
+const notesList = document.getElementById('notes-list');
+const notesEditor = document.getElementById('notes-editor');
+const notesEditorBack = document.getElementById('notes-editor-back');
+const notesEditorDelete = document.getElementById('notes-editor-delete');
+const notesEditorTitle = document.getElementById('notes-editor-title');
+const notesEditorContent = document.getElementById('notes-editor-content');
+const notesEditorReminder = document.getElementById('notes-editor-reminder');
+const notesReminderClear = document.getElementById('notes-reminder-clear');
+const notesEditorSave = document.getElementById('notes-editor-save');
+
+let currentNoteId = null;
+
+async function loadNotesPanel(query = '') {
+  const notes = await window.slime.notesGet();
+  notesList.innerHTML = '';
+
+  const filtered = query
+    ? notes.filter(n =>
+        (n.title || '').toLowerCase().includes(query.toLowerCase()) ||
+        (n.content || '').toLowerCase().includes(query.toLowerCase())
+      )
+    : notes;
+
+  if (filtered.length === 0) {
+    notesList.innerHTML = '<div class="panel-empty">No notes yet</div>';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  filtered.forEach(note => {
+    const el = document.createElement('div');
+    el.className = 'panel-item';
+    const time = note.updatedAt ? new Date(note.updatedAt) : new Date();
+    const timeStr = time.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' +
+                    time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const snippet = (note.content || '').substring(0, 50).replace(/\n/g, ' ');
+    const hasReminder = note.reminder && note.reminder > Date.now();
+
+    el.innerHTML = `
+      <div class="panel-item-icon">${escapeHtml((note.title || '?').charAt(0).toUpperCase())}</div>
+      <div class="panel-item-info">
+        <div class="panel-item-title">${escapeHtml(note.title || 'Untitled')}</div>
+        <div class="notes-item-snippet">${escapeHtml(snippet || 'Empty note')}</div>
+      </div>
+      ${hasReminder ? '<div class="notes-reminder-indicator" title="Reminder set"></div>' : ''}
+      <div class="panel-item-time">${timeStr}</div>
+    `;
+    el.addEventListener('click', () => openNoteEditor(note));
+    fragment.appendChild(el);
+  });
+  notesList.appendChild(fragment);
+}
+
+function openNoteEditor(note) {
+  currentNoteId = note ? note.id : crypto.randomUUID();
+  notesEditorTitle.value = note ? (note.title || '') : '';
+  notesEditorContent.value = note ? (note.content || '') : '';
+  if (note && note.reminder) {
+    notesEditorReminder.value = new Date(note.reminder).toISOString().slice(0, 16);
+  } else {
+    notesEditorReminder.value = '';
+  }
+  notesList.style.display = 'none';
+  notesSearch.parentElement.style.display = 'none';
+  notesEditor.style.display = '';
+  notesEditorTitle.focus();
+}
+
+function closeNoteEditor() {
+  notesEditor.style.display = 'none';
+  notesList.style.display = '';
+  notesSearch.parentElement.style.display = '';
+  currentNoteId = null;
+  loadNotesPanel(notesSearch.value);
+}
+
+notesEditorBack.addEventListener('click', closeNoteEditor);
+
+notesEditorSave.addEventListener('click', async () => {
+  const reminderVal = notesEditorReminder.value;
+  const reminder = reminderVal ? new Date(reminderVal).getTime() : null;
+  await window.slime.notesSave({
+    id: currentNoteId,
+    title: notesEditorTitle.value,
+    content: notesEditorContent.value,
+    reminder,
+  });
+  closeNoteEditor();
+});
+
+notesEditorDelete.addEventListener('click', async () => {
+  if (currentNoteId) {
+    await window.slime.notesDelete(currentNoteId);
+  }
+  closeNoteEditor();
+});
+
+notesReminderClear.addEventListener('click', () => {
+  notesEditorReminder.value = '';
+});
+
+notesAddBtn.addEventListener('click', () => {
+  openNoteEditor(null);
+});
+
+notesBtn.addEventListener('click', () => {
+  closeAllPanels();
+  const isVisible = notesPanel.style.display !== 'none';
+  notesPanel.style.display = isVisible ? 'none' : 'flex';
+  if (!isVisible) {
+    notesSearch.value = '';
+    notesEditor.style.display = 'none';
+    notesList.style.display = '';
+    notesSearch.parentElement.style.display = '';
+    loadNotesPanel();
+  }
+});
+
+notesCloseBtn.addEventListener('click', () => {
+  notesPanel.style.display = 'none';
+});
+
+let notesSearchTimeout;
+notesSearch.addEventListener('input', () => {
+  clearTimeout(notesSearchTimeout);
+  notesSearchTimeout = setTimeout(() => loadNotesPanel(notesSearch.value), 300);
+});
+
+// Reminder notification listener
+if (window.slime.onNoteReminder) {
+  window.slime.onNoteReminder((data) => {
+    // Show a toast notification in the browser UI
+    const toast = document.createElement('div');
+    toast.className = 'notes-reminder-toast';
+    toast.innerHTML = `
+      <div class="notes-reminder-toast-title">Reminder</div>
+      <div>${escapeHtml(data.title || 'Note')}</div>
+    `;
+    toast.addEventListener('click', () => {
+      toast.remove();
+      // Open notes panel and show the note
+      closeAllPanels();
+      notesPanel.style.display = 'flex';
+      notesSearch.value = '';
+      notesEditor.style.display = 'none';
+      notesList.style.display = '';
+      notesSearch.parentElement.style.display = '';
+      loadNotesPanel();
+    });
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      if (toast.parentElement) toast.remove();
+    }, 8000);
+  });
+}
+
+// ==========================================
 // Panel Helpers
 // ==========================================
 
@@ -2605,6 +2912,7 @@ function closeAllPanels() {
   passwordsPanel.style.display = 'none';
   if (macrosPanel) macrosPanel.style.display = 'none';
   if (emailPanel) emailPanel.style.display = 'none';
+  if (notesPanel) notesPanel.style.display = 'none';
 }
 
 // ==========================================
@@ -2817,6 +3125,11 @@ tbReload.addEventListener('click', doReload);
 
 newTabBtn.addEventListener('click', () => createTab());
 
+const newIncognitoBtn = document.getElementById('new-incognito-btn');
+if (newIncognitoBtn) {
+  newIncognitoBtn.addEventListener('click', () => createTab(DEFAULT_URL, { incognito: true }));
+}
+
 // ==========================================
 // Find in Page
 // ==========================================
@@ -2870,7 +3183,11 @@ findPrev.addEventListener('click', () => findInPage(false, true));
 findClose.addEventListener('click', () => closeFindBar());
 
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && e.key === 't') {
+  if (e.ctrlKey && e.shiftKey && e.key === 'N') {
+    e.preventDefault();
+    createTab(DEFAULT_URL, { incognito: true });
+  }
+  if (e.ctrlKey && !e.shiftKey && e.key === 't') {
     e.preventDefault();
     createTab();
   }
@@ -2915,7 +3232,7 @@ document.addEventListener('keydown', (e) => {
 // Close panels when clicking anywhere outside a panel
 document.addEventListener('mousedown', (e) => {
   const clickedPanel = e.target.closest('.panel-overlay');
-  const clickedSidebarBtn = e.target.closest('.sidebar-btn, #btn-bookmarks-panel, #btn-history, #btn-downloads, #btn-passwords, #macros-btn, #btn-email');
+  const clickedSidebarBtn = e.target.closest('.sidebar-btn, #btn-bookmarks-panel, #btn-history, #btn-downloads, #btn-passwords, #macros-btn, #btn-email, #btn-notes');
   if (!clickedPanel && !clickedSidebarBtn) {
     closeAllPanels();
   }
@@ -2933,6 +3250,26 @@ document.getElementById('btn-close').addEventListener('click', () => window.slim
 window.slime.onBlockedCountUpdated((count) => {
   blockedCountEl.textContent = count.toLocaleString();
 });
+
+// ==========================================
+// System Info (RAM usage, updated every 10s)
+// ==========================================
+
+const systemInfoSlime = document.getElementById('system-info-slime');
+const systemInfoSystem = document.getElementById('system-info-system');
+
+async function updateSystemInfo() {
+  try {
+    const info = await window.slime.getSystemInfo();
+    systemInfoSlime.textContent = 'Slime: ' + info.slimeMB + ' MB';
+    const usedGB = (info.systemUsedMB / 1024).toFixed(1);
+    const totalGB = (info.systemTotalMB / 1024).toFixed(1);
+    systemInfoSystem.textContent = 'System: ' + usedGB + ' / ' + totalGB + ' GB';
+  } catch (e) {}
+}
+
+updateSystemInfo();
+setInterval(updateSystemInfo, 10000);
 
 // ==========================================
 // Utilities
@@ -2960,6 +3297,14 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function formatAttachmentSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const size = (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1);
+  return size + ' ' + units[i];
 }
 
 // ==========================================
@@ -2997,6 +3342,16 @@ async function init() {
 
   if (!restored) {
     createTab(homepage);
+  }
+
+  // Open startup pages (skip URLs already open from session restore)
+  if (currentSettings?.startupPages?.length) {
+    const openUrls = new Set(tabs.map(t => t.url));
+    for (const url of currentSettings.startupPages) {
+      if (!openUrls.has(url)) {
+        createTab(url);
+      }
+    }
   }
 
   // Load existing downloads

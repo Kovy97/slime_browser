@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net, clipboard, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const originalFs = require('original-fs');
@@ -7,6 +7,7 @@ const { getYouTubeScript } = require('./youtube/inject');
 const { setupEmail } = require('./email/client');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
+const os = require('os');
 const pkg = require('../package.json');
 
 // Catch uncaught exceptions from network libs (e.g. ImapFlow ECONNRESET)
@@ -44,7 +45,7 @@ function validateUrl(val) {
 function validateSettings(settings) {
   if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return null;
   const clean = {};
-  const allowed = ['searchEngine', 'customSearchUrl', 'homepage', 'sessionRestore', 'cookieAutoDismiss', 'accentColor', 'bgColor', 'bgOpacity', 'glassMorphism'];
+  const allowed = ['searchEngine', 'customSearchUrl', 'homepage', 'sessionRestore', 'cookieAutoDismiss', 'accentColor', 'bgColor', 'bgOpacity', 'glassMorphism', 'startupPages'];
   for (const key of allowed) {
     if (key in settings) clean[key] = settings[key];
   }
@@ -156,6 +157,7 @@ const DEFAULT_SETTINGS = {
   bgColor: '#0c0c0c',
   bgOpacity: 100,
   glassMorphism: false,
+  startupPages: [],
 };
 
 function loadSettings() {
@@ -333,6 +335,58 @@ ipcMain.handle('macros-save', (_, macros) => {
   return clean;
 });
 
+// Tab preview capture
+ipcMain.handle('capture-tab', async (_, webContentsId) => {
+  try {
+    const wc = require('electron').webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) return null;
+    const image = await wc.capturePage();
+    const resized = image.resize({ width: 300 });
+    return resized.toDataURL();
+  } catch (e) { return null; }
+});
+
+// ==========================================
+// Notes
+// ==========================================
+
+ipcMain.handle('notes-get', () => {
+  const notes = readJSON('notes.json', []);
+  return notes.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+});
+
+ipcMain.handle('notes-save', (_, note) => {
+  if (!note || typeof note !== 'object') return false;
+  if (note.title && !validateString(note.title, 1024)) return false;
+  if (note.content && !validateString(note.content, 50000)) return false;
+  const notes = readJSON('notes.json', []);
+  const now = Date.now();
+  const id = note.id || crypto.randomUUID();
+  const idx = notes.findIndex(n => n.id === id);
+  const entry = {
+    id,
+    title: note.title || '',
+    content: note.content || '',
+    createdAt: idx >= 0 ? notes[idx].createdAt : now,
+    updatedAt: now,
+    reminder: note.reminder || null,
+  };
+  if (idx >= 0) {
+    notes[idx] = entry;
+  } else {
+    notes.unshift(entry);
+  }
+  writeJSON('notes.json', notes);
+  return entry;
+});
+
+ipcMain.handle('notes-delete', (_, id) => {
+  if (!id || typeof id !== 'string') return false;
+  const notes = readJSON('notes.json', []).filter(n => n.id !== id);
+  writeJSON('notes.json', notes);
+  return true;
+});
+
 // Paths (internal-only: returns preload path for webview setup, not exposed to web content)
 ipcMain.handle('get-webview-preload-path', () => {
   return path.join(__dirname, 'browser', 'ui', 'webview-preload.js');
@@ -421,7 +475,7 @@ ipcMain.handle('open-google-login', async (_, url) => {
     return;
   }
 
-  const firefoxUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0';
+  const firefoxUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0';
 
   // Use a separate session for login so Firefox UA settings don't affect main browsing
   const loginSession = session.fromPartition('persist:slime-login');
@@ -565,6 +619,34 @@ ipcMain.on('show-context-menu', (_, params) => {
 // Adblocker stats
 let blockedCount = 0;
 ipcMain.handle('get-blocked-count', () => blockedCount);
+
+// System info (RAM usage)
+// Use PowerShell to get actual Private Bytes (matches Task Manager)
+let cachedSlimeMB = Math.round(process.memoryUsage().rss / (1024 * 1024));
+
+function refreshSlimeMemory() {
+  execFile('powershell.exe', [
+    '-NoProfile', '-NoLogo', '-Command',
+    '[math]::Round((Get-Process electron -EA 0 | Measure-Object PM -Sum).Sum / 1MB)'
+  ], { timeout: 5000 }, (err, stdout) => {
+    if (!err && stdout.trim()) {
+      cachedSlimeMB = parseInt(stdout.trim()) || cachedSlimeMB;
+    }
+  });
+}
+
+refreshSlimeMemory();
+setInterval(refreshSlimeMemory, 10000);
+
+ipcMain.handle('get-system-info', () => {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  return {
+    slimeMB: cachedSlimeMB,
+    systemUsedMB: Math.round((totalMem - freeMem) / (1024 * 1024)),
+    systemTotalMB: Math.round(totalMem / (1024 * 1024)),
+  };
+});
 ipcMain.on('increment-blocked', () => {
   blockedCount++;
   mainWindow?.webContents.send('blocked-count-updated', blockedCount);
@@ -770,6 +852,14 @@ app.whenReady().then(async () => {
       mainWindow?.webContents.send('blocked-count-updated', blockedCount);
     }, { chromeMajor, chromeVersion });
 
+    // Incognito session — ephemeral (no persist: prefix), with adblocker + anti-detection
+    const incognitoSession = session.fromPartition('incognito');
+    incognitoSession.setUserAgent(chromeUA);
+    await setupAdblocker(incognitoSession, (count) => {
+      blockedCount += count;
+      mainWindow?.webContents.send('blocked-count-updated', blockedCount);
+    }, { chromeMajor, chromeVersion });
+
     // Download manager
     const downloads = new Map();
     let downloadIdCounter = 0;
@@ -822,9 +912,73 @@ app.whenReady().then(async () => {
       });
     });
 
+    // Also handle downloads from incognito session
+    incognitoSession.on('will-download', (event, item) => {
+      const id = ++downloadIdCounter;
+      const filename = item.getFilename();
+      const totalBytes = item.getTotalBytes();
+
+      downloads.set(id, {
+        id, filename, totalBytes, receivedBytes: 0,
+        state: 'progressing', path: item.getSavePath(),
+        startTime: Date.now(),
+      });
+
+      mainWindow?.webContents.send('download-started', { id, filename, totalBytes });
+
+      item.on('updated', (_, state) => {
+        const dl = downloads.get(id);
+        if (!dl) return;
+        dl.receivedBytes = item.getReceivedBytes();
+        dl.state = state;
+        dl.path = item.getSavePath();
+        mainWindow?.webContents.send('download-updated', {
+          id, receivedBytes: dl.receivedBytes, totalBytes: dl.totalBytes, state,
+        });
+      });
+
+      item.once('done', (_, state) => {
+        const dl = downloads.get(id);
+        if (!dl) return;
+        dl.state = state === 'completed' ? 'completed' : 'failed';
+        dl.receivedBytes = item.getReceivedBytes();
+        dl.path = item.getSavePath();
+        mainWindow?.webContents.send('download-done', {
+          id, state: dl.state, path: dl.path, filename: dl.filename,
+        });
+      });
+    });
+
     ipcMain.handle('downloads-get', () => Array.from(downloads.values()));
 
     createWindow();
+
+    // Notes reminder check (every 30 seconds)
+    setInterval(() => {
+      const notes = readJSON('notes.json', []);
+      const now = Date.now();
+      let changed = false;
+      for (const note of notes) {
+        if (note.reminder && note.reminder <= now) {
+          const notif = new Notification({
+            title: 'Reminder: ' + (note.title || 'Note'),
+            body: note.content?.substring(0, 100) || '',
+            icon: path.join(__dirname, '..', 'Slime1.ico'),
+          });
+          notif.show();
+          notif.on('click', () => {
+            const w = mainWindow;
+            if (w) { w.show(); w.focus(); }
+          });
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('note-reminder', { id: note.id, title: note.title });
+          }
+          note.reminder = null;
+          changed = true;
+        }
+      }
+      if (changed) writeJSON('notes.json', notes);
+    }, 30000);
 
     // Email client (IMAP/SMTP)
     setupEmail(ipcMain, encryptPassword, decryptPassword, readJSON, writeJSON, dataPath, () => mainWindow);

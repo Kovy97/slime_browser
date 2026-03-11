@@ -21,11 +21,17 @@ contextBridge.exposeInMainWorld('slime', {
 
   // Adblocker
   getBlockedCount: () => ipcRenderer.invoke('get-blocked-count'),
+
+  // System info
+  getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
   onBlockedCountUpdated: (callback) => {
     const handler = (_, count) => callback(count);
     ipcRenderer.on('blocked-count-updated', handler);
     return () => ipcRenderer.removeListener('blocked-count-updated', handler);
   },
+
+  // Tab preview capture
+  captureTab: (webContentsId) => ipcRenderer.invoke('capture-tab', webContentsId),
 
   // YouTube tools
   getYouTubeScript: () => ipcRenderer.invoke('get-youtube-script'),
@@ -146,6 +152,22 @@ contextBridge.exposeInMainWorld('slime', {
     return () => ipcRenderer.removeListener('google-login-complete', handler);
   },
 
+  // Notes
+  notesGet: () => ipcRenderer.invoke('notes-get'),
+  notesSave: (note) => {
+    if (!note || typeof note !== 'object') return Promise.reject('Invalid note');
+    return ipcRenderer.invoke('notes-save', note);
+  },
+  notesDelete: (id) => {
+    if (typeof id !== 'string') return Promise.reject('Invalid id');
+    return ipcRenderer.invoke('notes-delete', id);
+  },
+  onNoteReminder: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on('note-reminder', handler);
+    return () => ipcRenderer.removeListener('note-reminder', handler);
+  },
+
   // Email
   emailAccountsGet: () => ipcRenderer.invoke('email-accounts-get'),
   emailAccountsSave: (account) => ipcRenderer.invoke('email-accounts-save', account),
@@ -155,6 +177,7 @@ contextBridge.exposeInMainWorld('slime', {
   emailMessagesGet: (accountId, folder, page) => ipcRenderer.invoke('email-messages-get', accountId, folder, page),
   emailMessageGet: (accountId, folder, uid) => ipcRenderer.invoke('email-message-get', accountId, folder, uid),
   emailMessageDelete: (accountId, folder, uid) => ipcRenderer.invoke('email-message-delete', accountId, folder, uid),
+  emailAttachmentDownload: (accountId, folder, uid, index) => ipcRenderer.invoke('email-attachment-download', accountId, folder, uid, index),
   emailSend: (accountId, mail) => ipcRenderer.invoke('email-send', accountId, mail),
   emailNotificationsSet: (accountId, enabled) => ipcRenderer.invoke('email-notifications-set', accountId, enabled),
   onEmailNewMessage: (cb) => {

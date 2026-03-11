@@ -4,18 +4,45 @@
  * Makes the window look like Firefox to Google's detection.
  */
 (() => {
-  // 1. Remove Chromium/Electron giveaways
+  const FIREFOX_VERSION = '136.0';
+  const firefoxUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:' + FIREFOX_VERSION + ') Gecko/20100101 Firefox/' + FIREFOX_VERSION;
+
+  // 1. Override User-Agent and related navigator properties
+  Object.defineProperty(navigator, 'userAgent', { get: () => firefoxUA, configurable: true });
+  Object.defineProperty(navigator, 'appVersion', { get: () => '5.0 (Windows)', configurable: true });
+  Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
+  Object.defineProperty(navigator, 'product', { get: () => 'Gecko', configurable: true });
+  Object.defineProperty(navigator, 'productSub', { get: () => '20100101', configurable: true });
+  Object.defineProperty(navigator, 'appName', { get: () => 'Netscape', configurable: true });
+  Object.defineProperty(navigator, 'vendor', { get: () => '', configurable: true });
+  Object.defineProperty(navigator, 'vendorSub', { get: () => '', configurable: true });
+
+  // 2. Firefox-specific properties
+  Object.defineProperty(navigator, 'buildID', { get: () => '20260301000000', configurable: true });
+  Object.defineProperty(navigator, 'oscpu', { get: () => 'Windows NT 10.0; Win64; x64', configurable: true });
+
+  // 3. Remove Chromium/Electron giveaways
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
 
-  // 2. Remove window.chrome entirely — Firefox doesn't have it
+  // window.chrome — Firefox doesn't have this
   try { delete window.chrome; } catch(e) {}
   Object.defineProperty(window, 'chrome', { get: () => undefined, configurable: true });
 
-  // 3. Remove navigator.userAgentData — Firefox doesn't support this API
+  // navigator.userAgentData — Chrome's UA Client Hints, Firefox doesn't have this
   try { delete navigator.userAgentData; } catch(e) {}
   Object.defineProperty(navigator, 'userAgentData', { get: () => undefined, configurable: true });
 
-  // 4. Fix plugins — Firefox has different defaults
+  // navigator.connection — Chrome-only Network Information API
+  try { delete navigator.connection; } catch(e) {}
+  Object.defineProperty(navigator, 'connection', { get: () => undefined, configurable: true });
+
+  // performance.memory — Chrome-only
+  if (performance.memory) {
+    try { delete performance.memory; } catch(e) {}
+    Object.defineProperty(performance, 'memory', { get: () => undefined, configurable: true });
+  }
+
+  // 4. Plugins — Firefox returns empty
   const ffPlugins = {
     length: 0,
     item: () => null,
@@ -24,36 +51,32 @@
     [Symbol.iterator]: function*() {},
   };
   Object.defineProperty(navigator, 'plugins', { get: () => ffPlugins, configurable: true });
+  Object.defineProperty(navigator, 'mimeTypes', { get: () => ffPlugins, configurable: true });
 
-  // 5. Clean UA
-  const cleanUA = navigator.userAgent
-    .replace(/\s*Electron\/[\d.]+/g, '')
-    .replace(/\s*SlimeBrowser\/[\d.]+/g, '')
-    .replace(/\s*Chrome\/[\d.]+/g, '')
-    .replace(/\s*Safari\/[\d.]+/g, '');
-  // Only override if it still looks like Chrome
-  if (navigator.userAgent.includes('Chrome')) {
-    const firefoxUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0';
-    Object.defineProperty(navigator, 'userAgent', { get: () => firefoxUA, configurable: true });
-    Object.defineProperty(navigator, 'appVersion', { get: () => '5.0 (Windows)', configurable: true });
-    Object.defineProperty(navigator, 'product', { get: () => 'Gecko', configurable: true });
-    Object.defineProperty(navigator, 'appName', { get: () => 'Netscape', configurable: true });
-    Object.defineProperty(navigator, 'vendor', { get: () => '', configurable: true });
-  }
+  // 5. Languages
+  Object.defineProperty(navigator, 'languages', { get: () => ['de-DE', 'de', 'en-US', 'en'], configurable: true });
+  Object.defineProperty(navigator, 'language', { get: () => 'de-DE', configurable: true });
 
-  // 6. Languages
-  if (!navigator.languages || navigator.languages.length === 0) {
-    Object.defineProperty(navigator, 'languages', { get: () => ['de-DE', 'de', 'en-US', 'en'], configurable: true });
-  }
+  // 6. WebGL — hide ANGLE (Chromium-specific renderer)
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function(type, attrs) {
+    const ctx = origGetContext.call(this, type, attrs);
+    if (ctx && (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl')) {
+      const origGetParam = ctx.getParameter.bind(ctx);
+      const debugExt = ctx.getExtension('WEBGL_debug_renderer_info');
+      ctx.getParameter = function(param) {
+        if (debugExt) {
+          if (param === debugExt.UNMASKED_VENDOR_WEBGL) return 'Mozilla';
+          if (param === debugExt.UNMASKED_RENDERER_WEBGL) return 'Direct3D11';
+        }
+        return origGetParam(param);
+      };
+    }
+    return ctx;
+  };
 
   // 7. Remove Electron globals
   for (const prop of ['process', 'require', 'module', '__filename', '__dirname']) {
     if (window[prop]) { try { delete window[prop]; } catch(e) {} }
   }
-
-  // 8. Firefox-specific: buildID
-  Object.defineProperty(navigator, 'buildID', { get: () => '20181001000000', configurable: true });
-
-  // 9. Firefox-specific: oscpu
-  Object.defineProperty(navigator, 'oscpu', { get: () => 'Windows NT 10.0; Win64; x64', configurable: true });
 })();

@@ -26,34 +26,86 @@ const YOUTUBE_TOOLS_CSS = `
     display: none !important;
   }
 
-  /* Slime YouTube toolbar */
+  /* Slime YouTube toolbar - bar under video */
   #slime-yt-toolbar {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 99999;
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: #0a0a1a;
+    border: 1px solid rgba(74, 222, 128, 0.15);
+    border-radius: 10px;
+    margin: 8px 0 4px 0;
     font-family: 'Segoe UI', sans-serif;
+    flex-wrap: wrap;
   }
 
-  .slime-yt-btn {
-    background: #1a1a2e;
+  #slime-yt-toolbar .slime-toolbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     color: #4ade80;
-    border: 1px solid #4ade80;
-    padding: 8px 14px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-right: 6px;
+    padding-right: 10px;
+    border-right: 1px solid rgba(74, 222, 128, 0.2);
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  #slime-yt-toolbar .slime-toolbar-brand svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  #slime-yt-toolbar .slime-toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 6px;
+    border-right: 1px solid rgba(255,255,255,0.08);
+  }
+
+  #slime-yt-toolbar .slime-toolbar-group:last-child {
+    border-right: none;
+  }
+
+  #slime-yt-toolbar .slime-toolbar-label {
+    color: rgba(255,255,255,0.4);
+    font-size: 10px;
     font-weight: 600;
-    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-right: 4px;
     white-space: nowrap;
   }
 
+  .slime-yt-btn {
+    background: rgba(74, 222, 128, 0.08);
+    color: #ccc;
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.15s;
+    white-space: nowrap;
+    line-height: 1.4;
+  }
+
   .slime-yt-btn:hover {
+    background: rgba(74, 222, 128, 0.2);
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.4);
+  }
+
+  .slime-yt-btn.active {
     background: #4ade80;
-    color: #1a1a2e;
+    color: #0a0a1a;
+    border-color: #4ade80;
   }
 `;
 
@@ -370,6 +422,48 @@ const YOUTUBE_TOOLS_SCRIPT = `
     }
   }
 
+  // ===========================================
+  // AUTO MAX QUALITY
+  // ===========================================
+
+  function forceMaxQuality(retries) {
+    if (retries === undefined) retries = 3;
+    const player = document.querySelector('#movie_player');
+    if (!player) {
+      if (retries > 0) {
+        setTimeout(() => forceMaxQuality(retries - 1), 1000);
+      }
+      return;
+    }
+
+    const levels = typeof player.getAvailableQualityLevels === 'function'
+      ? player.getAvailableQualityLevels()
+      : [];
+
+    if (!levels || levels.length === 0) {
+      if (retries > 0) {
+        setTimeout(() => forceMaxQuality(retries - 1), 1000);
+      }
+      return;
+    }
+
+    const best = levels[0];
+    try {
+      if (typeof player.setPlaybackQualityRange === 'function') {
+        player.setPlaybackQualityRange(best, best);
+      }
+    } catch (e) {}
+
+    try {
+      if (typeof player.setPlaybackQuality === 'function') {
+        player.setPlaybackQuality(best);
+      }
+    } catch (e) {}
+
+    console.log('[Slime] Forced quality to', best);
+    showNotification('Quality: ' + best);
+  }
+
   let loopStart = null, loopEnd = null;
   function toggleLoop() {
     const video = document.querySelector('video');
@@ -428,25 +522,94 @@ const YOUTUBE_TOOLS_SCRIPT = `
 
   function createToolbar() {
     if (document.getElementById('slime-yt-toolbar')) return;
+
     const toolbar = document.createElement('div');
     toolbar.id = 'slime-yt-toolbar';
+
+    // Brand
+    const brand = document.createElement('div');
+    brand.className = 'slime-toolbar-brand';
+    brand.innerHTML = '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4ade80" stroke-width="1.5" fill="none"/><circle cx="6" cy="7" r="1.2" fill="#4ade80"/><circle cx="10" cy="7" r="1.2" fill="#4ade80"/><path d="M5.5 10.5q2.5 2 5 0" stroke="#4ade80" stroke-width="1.2" stroke-linecap="round" fill="none"/></svg>SLIME';
+    toolbar.appendChild(brand);
+
+    // Speed group
+    const speedGroup = document.createElement('div');
+    speedGroup.className = 'slime-toolbar-group';
+    const speedLabel = document.createElement('span');
+    speedLabel.className = 'slime-toolbar-label';
+    speedLabel.textContent = 'Speed';
+    speedGroup.appendChild(speedLabel);
+
+    [0.5, 1, 1.5, 2, 3].forEach(s => {
+      const btn = document.createElement('button');
+      btn.className = 'slime-yt-btn' + (s === 1 ? ' active' : '');
+      btn.textContent = s + 'x';
+      btn.addEventListener('click', () => {
+        setSpeed(s);
+        speedGroup.querySelectorAll('.slime-yt-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+      speedGroup.appendChild(btn);
+    });
+    toolbar.appendChild(speedGroup);
+
+    // Tools group
+    const toolsGroup = document.createElement('div');
+    toolsGroup.className = 'slime-toolbar-group';
+    const toolsLabel = document.createElement('span');
+    toolsLabel.className = 'slime-toolbar-label';
+    toolsLabel.textContent = 'Tools';
+    toolsGroup.appendChild(toolsLabel);
+
     [
-      { label: '0.5x', action: () => setSpeed(0.5) },
-      { label: '1x', action: () => setSpeed(1.0) },
-      { label: '1.5x', action: () => setSpeed(1.5) },
-      { label: '2x', action: () => setSpeed(2.0) },
-      { label: '3x', action: () => setSpeed(3.0) },
-      { label: 'Screenshot', action: takeScreenshot },
-      { label: 'PiP', action: togglePiP },
-      { label: 'Loop', action: toggleLoop },
-    ].forEach(({ label, action }) => {
+      { label: '\u{1F4F7}', title: 'Screenshot (S)', action: takeScreenshot },
+      { label: 'PiP', title: 'Picture in Picture (Alt+P)', action: togglePiP },
+      { label: '\u{1F501}', title: 'Segment Loop (Alt+L)', action: toggleLoop },
+      { label: 'MAX', title: 'Max Quality', action: () => forceMaxQuality() },
+    ].forEach(({ label, title, action }) => {
       const btn = document.createElement('button');
       btn.className = 'slime-yt-btn';
       btn.textContent = label;
+      btn.title = title;
       btn.addEventListener('click', action);
-      toolbar.appendChild(btn);
+      toolsGroup.appendChild(btn);
     });
-    document.body.appendChild(toolbar);
+    toolbar.appendChild(toolsGroup);
+
+    // Insert below the video player, retry until anchor is found
+    function insertToolbar(retries) {
+      if (document.getElementById('slime-yt-toolbar') !== toolbar && document.getElementById('slime-yt-toolbar')) return;
+      const selectors = [
+        '#below',
+        '#above-the-fold',
+        '#info',
+        '#meta',
+      ];
+      for (const sel of selectors) {
+        const anchor = document.querySelector(sel);
+        if (anchor && anchor.parentElement) {
+          anchor.parentElement.insertBefore(toolbar, anchor);
+          return;
+        }
+      }
+      // Fallback: after player container
+      const player = document.querySelector('#player-container-inner') ||
+                     document.querySelector('#player-container-outer') ||
+                     document.querySelector('#player');
+      if (player) {
+        player.after(toolbar);
+        return;
+      }
+      // Retry if DOM not ready yet
+      if (retries > 0) {
+        setTimeout(() => insertToolbar(retries - 1), 500);
+      } else {
+        // Last resort: fixed position at bottom
+        toolbar.style.cssText = 'position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:99999;';
+        document.body.appendChild(toolbar);
+      }
+    }
+    insertToolbar(10);
   }
 
   if (!window._slimeKeydownHandler) {
@@ -461,9 +624,21 @@ const YOUTUBE_TOOLS_SCRIPT = `
     document.addEventListener('keydown', window._slimeKeydownHandler);
   }
 
+  let _slimeLastVideoUrl = '';
+
+  function onVideoPage() {
+    createToolbar();
+    // Only force quality once per navigation (avoid re-triggering on DOM mutations)
+    const currentUrl = location.href;
+    if (currentUrl !== _slimeLastVideoUrl) {
+      _slimeLastVideoUrl = currentUrl;
+      setTimeout(() => forceMaxQuality(), 800);
+    }
+  }
+
   const pageObserver = new MutationObserver(() => {
     if (location.pathname === '/watch') {
-      createToolbar();
+      onVideoPage();
     } else {
       const tb = document.getElementById('slime-yt-toolbar');
       if (tb) tb.remove();
@@ -471,7 +646,14 @@ const YOUTUBE_TOOLS_SCRIPT = `
   });
   pageObserver.observe(document.body, { childList: true, subtree: true });
   window._slimeObservers.push(pageObserver);
-  if (location.pathname === '/watch') createToolbar();
+  if (location.pathname === '/watch') onVideoPage();
+
+  // Also listen for YouTube SPA navigations
+  document.addEventListener('yt-navigate-finish', () => {
+    if (location.pathname === '/watch') {
+      onVideoPage();
+    }
+  });
 
   console.log('[Slime Browser] YouTube Tools v4 loaded');
 })();

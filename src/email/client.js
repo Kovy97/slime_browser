@@ -6,9 +6,10 @@
 const { ImapFlow } = require('imapflow');
 const nodemailer = require('nodemailer');
 const { simpleParser } = require('mailparser');
-const { Notification } = require('electron');
+const { Notification, shell, app } = require('electron');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 
 // Active IMAP connections (reused across requests)
 const connections = new Map();
@@ -154,19 +155,25 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
     try {
       const messages = [];
       const limit = 50;
-      const total = client.mailbox.exists;
-      if (total === 0) return { messages: [], total: 0, hasMore: false };
 
-      const end = total - page * limit;
-      const start = Math.max(1, end - limit + 1);
-      if (end < 1) return { messages: [], total, hasMore: false };
+      // Use SEARCH to get all UIDs, then sort by UID descending (newest first)
+      const allUids = await client.search({ all: true }, { uid: true });
+      if (!allUids || allUids.length === 0) return { messages: [], total: 0, hasMore: false };
 
-      for await (const msg of client.fetch(`${start}:${end}`, {
+      // Sort UIDs descending (highest UID = newest message)
+      allUids.sort((a, b) => b - a);
+
+      const total = allUids.length;
+      const pageUids = allUids.slice(page * limit, (page + 1) * limit);
+      if (pageUids.length === 0) return { messages: [], total, hasMore: false };
+
+      // Fetch envelopes for this page of UIDs
+      const uidRange = pageUids.join(',');
+      for await (const msg of client.fetch(uidRange, {
         envelope: true,
         flags: true,
         uid: true,
-        bodyStructure: true,
-      })) {
+      }, { uid: true })) {
         messages.push({
           uid: msg.uid,
           subject: msg.envelope.subject || '(No Subject)',
@@ -176,7 +183,11 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
           seen: msg.flags.has('\\Seen'),
         });
       }
-      return { messages: messages.reverse(), total, hasMore: start > 1 };
+
+      // Sort by date descending (most recent first)
+      messages.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      return { messages, total, hasMore: (page + 1) * limit < total };
     } finally {
       lock.release();
     }
@@ -200,7 +211,35 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
         date: parsed.date,
         html: parsed.html || null,
         text: parsed.text || null,
+        attachments: (parsed.attachments || []).map((att, i) => ({
+          filename: att.filename || `attachment-${i}`,
+          contentType: att.contentType,
+          size: att.size || att.content?.length || 0,
+          index: i,
+        })),
       };
+    } finally {
+      lock.release();
+    }
+  });
+
+  ipcMain.handle('email-attachment-download', async (_, accountId, folder, uid, index) => {
+    const client = await getOrConnect(accountId, decrypt, readJSON);
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const downloaded = await client.download(uid.toString(), undefined, { uid: true });
+      const parsed = await simpleParser(downloaded.content);
+      const attachments = parsed.attachments || [];
+      if (index < 0 || index >= attachments.length) {
+        throw new Error('Attachment index out of range');
+      }
+      const att = attachments[index];
+      const filename = att.filename || `attachment-${index}`;
+      const downloadsDir = app.getPath('downloads');
+      const filePath = path.join(downloadsDir, filename);
+      fs.writeFileSync(filePath, att.content);
+      shell.showItemInFolder(filePath);
+      return { success: true, filePath };
     } finally {
       lock.release();
     }
