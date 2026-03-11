@@ -128,6 +128,13 @@ contextBridge.exposeInMainWorld('slime', {
     return () => ipcRenderer.removeListener('open-url', handler);
   },
 
+  // Open URL in new tab (from webview popups intercepted by main process)
+  onOpenUrlNewTab: (callback) => {
+    const handler = (_, url) => callback(url);
+    ipcRenderer.on('open-url-new-tab', handler);
+    return () => ipcRenderer.removeListener('open-url-new-tab', handler);
+  },
+
   // Google Login (Firefox-UA BrowserWindow to bypass Google's embedded browser block)
   openGoogleLogin: (url) => {
     if (typeof url !== 'string') return Promise.reject('Invalid URL');

@@ -96,6 +96,9 @@ const blockedCountEl = document.getElementById('blocked-count');
 const btnBack = document.getElementById('btn-back');
 const btnForward = document.getElementById('btn-forward');
 const btnReload = document.getElementById('btn-reload');
+const tbBack = document.getElementById('tb-back');
+const tbForward = document.getElementById('tb-forward');
+const tbReload = document.getElementById('tb-reload');
 const newTabBtn = document.getElementById('new-tab-btn');
 const ntpSearchInput = document.getElementById('ntp-search-input');
 const findBar = document.getElementById('find-bar');
@@ -591,17 +594,17 @@ function navigate(input, newTab = false) {
 function updateNavButtons() {
   const tab = tabMap.get(activeTabId);
   if (!tab || !tab.webview) {
-    btnBack.disabled = true;
-    btnForward.disabled = true;
+    btnBack.disabled = tbBack.disabled = true;
+    btnForward.disabled = tbForward.disabled = true;
     return;
   }
 
   try {
-    btnBack.disabled = !tab.webview.canGoBack();
-    btnForward.disabled = !tab.webview.canGoForward();
+    btnBack.disabled = tbBack.disabled = !tab.webview.canGoBack();
+    btnForward.disabled = tbForward.disabled = !tab.webview.canGoForward();
   } catch (e) {
-    btnBack.disabled = true;
-    btnForward.disabled = true;
+    btnBack.disabled = tbBack.disabled = true;
+    btnForward.disabled = tbForward.disabled = true;
   }
 }
 
@@ -2230,17 +2233,17 @@ document.querySelectorAll('.ntp-shortcut').forEach(el => {
   });
 });
 
-btnBack.addEventListener('click', () => {
+function goBack() {
   const tab = tabMap.get(activeTabId);
   try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(e) { console.warn('[Slime]', e.message || e); }
-});
+}
 
-btnForward.addEventListener('click', () => {
+function goForward() {
   const tab = tabMap.get(activeTabId);
   try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(e) { console.warn('[Slime]', e.message || e); }
-});
+}
 
-btnReload.addEventListener('click', () => {
+function doReload() {
   const tab = tabMap.get(activeTabId);
   if (tab?.webview) {
     try {
@@ -2251,7 +2254,17 @@ btnReload.addEventListener('click', () => {
       }
     } catch(e) { console.warn('[Slime]', e.message || e); }
   }
-});
+}
+
+// Sidebar nav buttons
+btnBack.addEventListener('click', goBack);
+btnForward.addEventListener('click', goForward);
+btnReload.addEventListener('click', doReload);
+
+// Titlebar nav buttons
+tbBack.addEventListener('click', goBack);
+tbForward.addEventListener('click', goForward);
+tbReload.addEventListener('click', doReload);
 
 newTabBtn.addEventListener('click', () => createTab());
 
@@ -2447,6 +2460,11 @@ async function init() {
 
   // Handle URLs opened from external apps (default browser)
   window.slime.onOpenUrl((url) => {
+    createTab(url);
+  });
+
+  // Handle popups/window.open from webviews — open in new tab
+  window.slime.onOpenUrlNewTab((url) => {
     createTab(url);
   });
 

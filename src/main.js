@@ -685,8 +685,17 @@ app.whenReady().then(async () => {
     }
 
     // Inject into every webview — ALL frames including Cloudflare Turnstile iframes
+    // Also intercept window.open / target="_blank" to open in new tab instead of popup
     app.on('web-contents-created', (_, contents) => {
       if (contents.getType() === 'webview') {
+        // Intercept popups: open in new tab instead of a separate window
+        contents.setWindowOpenHandler(({ url }) => {
+          if (url && url !== 'about:blank') {
+            mainWindow?.webContents.send('open-url-new-tab', url);
+          }
+          return { action: 'deny' };
+        });
+
         // Inject into main frame at navigation start
         contents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
           if (isMainFrame) {
