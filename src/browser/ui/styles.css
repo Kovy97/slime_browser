@@ -742,6 +742,15 @@ body.sidebar-pinned #main {
   flex-shrink: 0;
 }
 
+#version-label {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.5;
+  padding: 2px 0 0;
+  font-family: var(--font-mono);
+}
+
 .sidebar-btn {
   width: 100%;
   height: 34px;

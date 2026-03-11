@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('slime', {
 
   // Adblocker
   getBlockedCount: () => ipcRenderer.invoke('get-blocked-count'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
   // System info
   getSystemInfo: () => ipcRenderer.invoke('get-system-info'),

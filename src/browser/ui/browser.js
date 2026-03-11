@@ -3475,6 +3475,12 @@ function formatAttachmentSize(bytes) {
 
 async function init() {
   try {
+  // Show version in sidebar
+  const versionLabel = document.getElementById('version-label');
+  if (versionLabel) {
+    window.slime.getAppVersion().then(v => { versionLabel.textContent = 'v' + v; }).catch(() => {});
+  }
+
   // Load webview preload path and settings
   webviewPreloadPath = await window.slime.getWebviewPreloadPath();
   await loadSettings();

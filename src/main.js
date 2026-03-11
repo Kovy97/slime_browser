@@ -656,6 +656,7 @@ ipcMain.on('show-context-menu', (_, params) => {
 // Adblocker stats
 let blockedCount = 0;
 ipcMain.handle('get-blocked-count', () => blockedCount);
+ipcMain.handle('get-app-version', () => pkg.version);
 
 // System info (RAM usage)
 // Use PowerShell to get actual Private Bytes (matches Task Manager)
