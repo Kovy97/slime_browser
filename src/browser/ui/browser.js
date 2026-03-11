@@ -526,6 +526,86 @@ function createWebview(tabId, url) {
   return webview;
 }
 
+// Cookie Consent & Popup Auto-Dismiss Script (injected when setting enabled)
+const COOKIE_DISMISS_SCRIPT = `(function() {
+  if (window.__slimeCookieDismiss) return;
+  window.__slimeCookieDismiss = true;
+  try {
+    var ACCEPT_PATTERNS = [
+      /^alle akzeptieren$/i, /^akzeptieren$/i, /^zustimmen$/i,
+      /^einverstanden$/i, /^alle annehmen$/i, /^verstanden$/i,
+      /^weiter ohne$/i,
+      /^accept all$/i, /^accept cookies?$/i, /^accept$/i,
+      /^i agree$/i, /^got it$/i, /^allow all$/i, /^agree$/i,
+      /^dismiss$/i
+    ];
+    var BUTTON_SELECTORS = '[id*="accept" i],[id*="consent" i],[class*="accept" i],[class*="consent" i],.cmp-accept,.js-accept,#onetrust-accept-btn-handler,[data-testid*="accept" i],[data-action*="accept" i]';
+    var BANNER_SELECTORS = '#cookie-banner,#cookie-consent,#cookie-notice,.cookie-banner,.cookie-consent,.cookie-notice,#CybotCookiebotDialog,#onetrust-banner-sdk,.cc-banner,.cc-window,#gdpr-consent,.gdpr-banner,.consent-banner,.consent-modal,[class*="cookie-banner" i],[class*="cookie-consent" i],[id*="cookie-banner" i],[aria-label*="cookie" i],[aria-label*="consent" i]';
+    var POPUP_SELECTORS = '[class*="newsletter-popup" i],[id*="newsletter-popup" i],[class*="newsletter-overlay" i],[id*="newsletter-overlay" i],[class*="subscribe-popup" i],[id*="subscribe-popup" i],[class*="adblock-notice" i],[id*="adblock-notice" i],[class*="adblock-overlay" i],[id*="adblock-overlay" i],[class*="adb-message" i],[id*="adb-message" i],[class*="anti-adblock" i],[id*="anti-adblock" i]';
+
+    function tryClickButtons() {
+      var btns = document.querySelectorAll(BUTTON_SELECTORS);
+      for (var i = 0; i < btns.length; i++) {
+        var el = btns[i], tag = el.tagName.toLowerCase();
+        if ((tag==='button'||tag==='a'||tag==='input'||el.getAttribute('role')==='button') && el.offsetParent !== null) { el.click(); return true; }
+      }
+      var cands = document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]');
+      for (var j = 0; j < cands.length; j++) {
+        var txt = (cands[j].textContent||cands[j].value||'').trim();
+        if (txt.length > 50) continue;
+        for (var k = 0; k < ACCEPT_PATTERNS.length; k++) {
+          if (ACCEPT_PATTERNS[k].test(txt) && cands[j].offsetParent !== null) { cands[j].click(); return true; }
+        }
+      }
+      return false;
+    }
+    function hideBanners() {
+      var els = document.querySelectorAll(BANNER_SELECTORS);
+      for (var i = 0; i < els.length; i++) {
+        if (els[i].offsetParent !== null || getComputedStyle(els[i]).display !== 'none') els[i].style.setProperty('display','none','important');
+      }
+    }
+    function removeOverlays() {
+      if (document.body.classList.contains('modal-open')) document.body.classList.remove('modal-open');
+      if (document.body.style.overflow==='hidden') document.body.style.overflow='';
+      if (document.documentElement.style.overflow==='hidden') document.documentElement.style.overflow='';
+      var els = document.querySelectorAll('div[class],div[id]'), vw=window.innerWidth, vh=window.innerHeight;
+      for (var i=0;i<els.length;i++) {
+        var s=getComputedStyle(els[i]); if(s.position!=='fixed') continue;
+        var z=parseInt(s.zIndex,10); if(isNaN(z)||z<=999) continue;
+        var t=(els[i].textContent||'').toLowerCase();
+        if(t.includes('security')||t.includes('warning')||t.includes('dangerous')||t.includes('sicherheit')||t.includes('warnung')) continue;
+        var r=els[i].getBoundingClientRect(); if(r.width<vw*0.8||r.height<vh*0.8) continue;
+        var bg=s.backgroundColor,op=parseFloat(s.opacity),m=bg.match(/rgba?\\(\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*(?:,\\s*([\\d.]+))?\\s*\\)/);
+        var ba=m&&m[1]?parseFloat(m[1]):1;
+        if((ba<0.95||op<0.95)&&els[i].children.length<=1) els[i].style.setProperty('display','none','important');
+      }
+    }
+    function dismissPopups() {
+      var els = document.querySelectorAll(POPUP_SELECTORS);
+      for (var i=0;i<els.length;i++) {
+        var s=getComputedStyle(els[i]),p=s.position;
+        if(p==='fixed'||p==='absolute'||p==='sticky') { var z=parseInt(s.zIndex,10); if(!isNaN(z)&&z>99) els[i].style.setProperty('display','none','important'); }
+      }
+    }
+    function runAll() { try { tryClickButtons(); hideBanners(); removeOverlays(); dismissPopups(); } catch(e){} }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function() { runAll(); setTimeout(runAll, 1500); });
+    } else {
+      runAll(); setTimeout(runAll, 1500);
+    }
+    var dt=null, st=Date.now();
+    var obs = new MutationObserver(function() {
+      if(Date.now()-st>30000){obs.disconnect();return;}
+      if(dt)return; dt=setTimeout(function(){dt=null;runAll();},1000);
+    });
+    if(document.body) obs.observe(document.body,{childList:true,subtree:true});
+    else document.addEventListener('DOMContentLoaded',function(){st=Date.now();obs.observe(document.body,{childList:true,subtree:true});});
+    setTimeout(function(){obs.disconnect();if(dt){clearTimeout(dt);dt=null;}},30000);
+  } catch(e){}
+})();`;
+
 function injectContentScripts(webview, url) {
   if (url && url.includes('youtube.com') && youtubeScript) {
     try {
@@ -533,6 +613,12 @@ function injectContentScripts(webview, url) {
     } catch (e) {
       console.warn('[Slime] Failed to inject YouTube tools:', e);
     }
+  }
+  // Inject cookie auto-dismiss if enabled in settings
+  if (currentSettings?.cookieAutoDismiss !== false) {
+    try {
+      webview.executeJavaScript(COOKIE_DISMISS_SCRIPT);
+    } catch (e) {}
   }
 }
 
@@ -1202,6 +1288,7 @@ const settingHomepage = document.getElementById('setting-homepage');
 const settingRestoreTabs = document.getElementById('setting-restore-tabs');
 const settingZoom = document.getElementById('setting-zoom');
 const settingAdblocker = document.getElementById('setting-adblocker');
+const settingCookieDismiss = document.getElementById('setting-cookie-dismiss');
 const settingGlass = document.getElementById('setting-glass');
 const settingAccentCustom = document.getElementById('setting-accent-custom');
 const colorSwatches = document.querySelectorAll('.color-swatch');
@@ -1268,6 +1355,7 @@ function populateSettingsUI(s) {
   settingRestoreTabs.checked = s.restoreTabs;
   settingZoom.value = String(s.zoomLevel);
   settingAdblocker.checked = s.adblockerEnabled;
+  settingCookieDismiss.checked = s.cookieAutoDismiss !== false;
   settingGlass.checked = !!s.glassMorphism;
 
   // Accent color swatches
@@ -1333,6 +1421,7 @@ settingHomepage.addEventListener('change', () => saveSetting('homepage', setting
 settingRestoreTabs.addEventListener('change', () => saveSetting('restoreTabs', settingRestoreTabs.checked));
 settingZoom.addEventListener('change', () => saveSetting('zoomLevel', parseInt(settingZoom.value)));
 settingAdblocker.addEventListener('change', () => saveSetting('adblockerEnabled', settingAdblocker.checked));
+settingCookieDismiss.addEventListener('change', () => saveSetting('cookieAutoDismiss', settingCookieDismiss.checked));
 settingGlass.addEventListener('change', () => saveSetting('glassMorphism', settingGlass.checked));
 
 // Color swatches

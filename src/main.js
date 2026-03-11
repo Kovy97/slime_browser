@@ -22,7 +22,7 @@ function validateUrl(val) {
 function validateSettings(settings) {
   if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return null;
   const clean = {};
-  const allowed = ['searchEngine', 'customSearchUrl', 'homepage', 'sessionRestore', 'accentColor', 'bgColor', 'bgOpacity', 'glassMorphism'];
+  const allowed = ['searchEngine', 'customSearchUrl', 'homepage', 'sessionRestore', 'cookieAutoDismiss', 'accentColor', 'bgColor', 'bgOpacity', 'glassMorphism'];
   for (const key of allowed) {
     if (key in settings) clean[key] = settings[key];
   }
@@ -127,6 +127,7 @@ const DEFAULT_SETTINGS = {
   customSearchUrl: '',
   restoreTabs: true,
   adblockerEnabled: true,
+  cookieAutoDismiss: true,
   homepage: 'slime://newtab',
   zoomLevel: 100,
   accentColor: '#4ade80',
