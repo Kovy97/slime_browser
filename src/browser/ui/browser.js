@@ -2136,6 +2136,465 @@ if (macrosAddBtn) {
 }
 
 // ==========================================
+// Email Panel
+// ==========================================
+
+const emailPanel = document.getElementById('email-panel');
+const emailCloseBtn = document.getElementById('email-close');
+const emailBtn = document.getElementById('btn-email');
+const emailBadge = document.getElementById('email-badge');
+const emailAccountSelect = document.getElementById('email-account-select');
+const emailFolders = document.getElementById('email-folders');
+const emailSearch = document.getElementById('email-search');
+const emailList = document.getElementById('email-list');
+const emailReader = document.getElementById('email-reader');
+const emailReaderSubject = document.getElementById('email-reader-subject');
+const emailReaderFrom = document.getElementById('email-reader-from');
+const emailReaderDate = document.getElementById('email-reader-date');
+const emailReaderBody = document.getElementById('email-reader-body');
+const emailReaderBack = document.getElementById('email-reader-back');
+const emailReplyBtn = document.getElementById('email-reply-btn');
+const emailDeleteBtn = document.getElementById('email-delete-btn');
+const emailComposeBtn = document.getElementById('email-compose-btn');
+const emailAccountsBtn = document.getElementById('email-accounts-btn');
+const emailNotifToggle = document.getElementById('email-notif-toggle');
+const emailComposeModal = document.getElementById('email-compose-modal');
+const emailComposeTo = document.getElementById('email-compose-to');
+const emailComposeSubject = document.getElementById('email-compose-subject');
+const emailComposeBody = document.getElementById('email-compose-body');
+const emailComposeSend = document.getElementById('email-compose-send');
+const emailComposeCancel = document.getElementById('email-compose-cancel');
+const emailComposeClose = document.getElementById('email-compose-close');
+const emailAccountModal = document.getElementById('email-account-modal');
+const emailAccountClose = document.getElementById('email-account-close');
+const emailAccountList = document.getElementById('email-account-list');
+const emailAcctLabel = document.getElementById('email-acct-label');
+const emailAcctEmail = document.getElementById('email-acct-email');
+const emailAcctPassword = document.getElementById('email-acct-password');
+const emailAcctImapHost = document.getElementById('email-acct-imap-host');
+const emailAcctImapPort = document.getElementById('email-acct-imap-port');
+const emailAcctSmtpHost = document.getElementById('email-acct-smtp-host');
+const emailAcctSmtpPort = document.getElementById('email-acct-smtp-port');
+const emailAcctTest = document.getElementById('email-acct-test');
+const emailAcctSave = document.getElementById('email-acct-save');
+
+let currentEmailAccount = null;
+let currentEmailFolder = 'INBOX';
+let emailAccounts = [];
+
+function sanitizeEmailHtml(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  // Remove script tags
+  div.querySelectorAll('script').forEach(el => el.remove());
+  // Remove on* event attributes
+  div.querySelectorAll('*').forEach(el => {
+    for (const attr of [...el.attributes]) {
+      if (attr.name.startsWith('on') || (attr.name === 'href' && attr.value.trim().toLowerCase().startsWith('javascript:'))) {
+        el.removeAttribute(attr.name);
+      }
+      if (attr.name === 'src' && attr.value.trim().toLowerCase().startsWith('javascript:')) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+  return div.innerHTML;
+}
+
+function updateEmailBadge(count) {
+  if (count > 0) {
+    emailBadge.textContent = count > 99 ? '99+' : count;
+    emailBadge.classList.add('active');
+  } else {
+    emailBadge.textContent = '';
+    emailBadge.classList.remove('active');
+  }
+}
+
+async function loadEmailPanel() {
+  try {
+    emailAccounts = await window.slime.emailAccountsGet() || [];
+  } catch (e) {
+    emailAccounts = [];
+  }
+
+  // Populate account selector
+  emailAccountSelect.innerHTML = '';
+  if (emailAccounts.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No accounts — click Accounts to add';
+    emailAccountSelect.appendChild(opt);
+    emailList.innerHTML = '<div class="panel-empty">Add an email account to get started</div>';
+    emailFolders.innerHTML = '';
+    return;
+  }
+
+  emailAccounts.forEach(acct => {
+    const opt = document.createElement('option');
+    opt.value = acct.id;
+    opt.textContent = acct.label || acct.email;
+    emailAccountSelect.appendChild(opt);
+  });
+
+  if (!currentEmailAccount || !emailAccounts.find(a => a.id === currentEmailAccount)) {
+    currentEmailAccount = emailAccounts[0].id;
+  }
+  emailAccountSelect.value = currentEmailAccount;
+
+  loadEmailFolders(currentEmailAccount);
+  loadEmailMessages(currentEmailAccount, currentEmailFolder);
+}
+
+async function loadEmailFolders(accountId) {
+  emailFolders.innerHTML = '';
+  let folders = [];
+  try {
+    const rawFolders = await window.slime.emailFoldersGet(accountId) || [];
+    folders = rawFolders.map(f => typeof f === 'string' ? f : f.path || f.name);
+  } catch (e) {
+    folders = ['INBOX', 'Sent', 'Drafts', 'Trash'];
+  }
+
+  folders.forEach(folder => {
+    const btn = document.createElement('button');
+    btn.className = 'email-folder-btn' + (folder === currentEmailFolder ? ' active' : '');
+    btn.textContent = folder;
+    btn.addEventListener('click', () => {
+      currentEmailFolder = folder;
+      emailFolders.querySelectorAll('.email-folder-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadEmailMessages(currentEmailAccount, folder);
+    });
+    emailFolders.appendChild(btn);
+  });
+}
+
+async function loadEmailMessages(accountId, folder, page = 1) {
+  emailList.innerHTML = '<div class="panel-empty">Loading...</div>';
+  emailReader.style.display = 'none';
+  emailList.style.display = '';
+
+  let messages = [];
+  try {
+    const result = await window.slime.emailMessagesGet(accountId, folder, page) || {};
+    messages = result.messages || result || [];
+  } catch (e) {
+    emailList.innerHTML = '<div class="panel-empty">Failed to load messages</div>';
+    return;
+  }
+
+  if (messages.length === 0) {
+    emailList.innerHTML = '<div class="panel-empty">No emails in this folder</div>';
+    return;
+  }
+
+  emailList.innerHTML = '';
+  const fragment = document.createDocumentFragment();
+
+  messages.forEach(msg => {
+    const el = document.createElement('div');
+    const isUnread = msg.unread || !msg.seen;
+    const fromText = typeof msg.from === 'object' && msg.from ? (msg.from.name || msg.from.address || '') : (msg.from || '');
+    const dateStr = msg.date ? new Date(msg.date).toLocaleDateString() : '';
+    el.className = 'email-item' + (isUnread ? ' unread' : '');
+    el.innerHTML = `
+      <div class="email-item-date">${escapeHtml(dateStr)}</div>
+      <div class="email-item-subject">${escapeHtml(msg.subject || '(no subject)')}</div>
+      <div class="email-item-from">${escapeHtml(fromText)}</div>
+    `;
+    el.addEventListener('click', () => {
+      openEmailMessage(accountId, folder, msg.uid);
+    });
+    fragment.appendChild(el);
+  });
+
+  emailList.appendChild(fragment);
+}
+
+async function openEmailMessage(accountId, folder, uid) {
+  emailList.style.display = 'none';
+  emailReader.style.display = 'flex';
+  emailReaderBody.innerHTML = '<div class="panel-empty">Loading...</div>';
+
+  try {
+    const msg = await window.slime.emailMessageGet(accountId, folder, uid);
+    emailReaderSubject.textContent = msg.subject || '(no subject)';
+    emailReaderFrom.textContent = msg.from || '';
+    emailReaderDate.textContent = msg.date || '';
+
+    if (msg.html) {
+      emailReaderBody.innerHTML = sanitizeEmailHtml(msg.html);
+    } else {
+      emailReaderBody.textContent = msg.text || '';
+    }
+
+    // Store current message info for reply/delete
+    emailReader.dataset.uid = uid;
+    emailReader.dataset.accountId = accountId;
+    emailReader.dataset.folder = folder;
+    emailReader.dataset.from = msg.from || '';
+    emailReader.dataset.subject = msg.subject || '';
+  } catch (e) {
+    emailReaderBody.innerHTML = '<div class="panel-empty">Failed to load message</div>';
+  }
+}
+
+// Intercept link clicks in email reader body
+emailReaderBody.addEventListener('click', (e) => {
+  const link = e.target.closest('a');
+  if (link && link.href) {
+    e.preventDefault();
+    createTab(link.href);
+  }
+});
+
+emailReaderBack.addEventListener('click', () => {
+  emailReader.style.display = 'none';
+  emailList.style.display = '';
+});
+
+// Email panel toggle
+emailBtn.addEventListener('click', () => {
+  closeAllPanels();
+  const isVisible = emailPanel.style.display !== 'none';
+  emailPanel.style.display = isVisible ? 'none' : 'flex';
+  if (!isVisible) {
+    emailSearch.value = '';
+    loadEmailPanel();
+  }
+});
+
+emailCloseBtn.addEventListener('click', () => {
+  emailPanel.style.display = 'none';
+});
+
+// Account selector change
+emailAccountSelect.addEventListener('change', () => {
+  currentEmailAccount = emailAccountSelect.value;
+  currentEmailFolder = 'INBOX';
+  loadEmailFolders(currentEmailAccount);
+  loadEmailMessages(currentEmailAccount, currentEmailFolder);
+});
+
+// Email search filter
+let emailSearchTimeout;
+emailSearch.addEventListener('input', () => {
+  clearTimeout(emailSearchTimeout);
+  emailSearchTimeout = setTimeout(() => {
+    const query = emailSearch.value.trim().toLowerCase();
+    const items = emailList.querySelectorAll('.email-item');
+    items.forEach(item => {
+      const text = item.textContent.toLowerCase();
+      item.style.display = text.includes(query) ? '' : 'none';
+    });
+  }, 200);
+});
+
+// Compose modal
+emailComposeBtn.addEventListener('click', () => {
+  emailComposeTo.value = '';
+  emailComposeSubject.value = '';
+  emailComposeBody.value = '';
+  emailComposeModal.style.display = 'flex';
+  emailComposeTo.focus();
+});
+
+function closeComposeModal() {
+  emailComposeModal.style.display = 'none';
+}
+
+emailComposeCancel.addEventListener('click', closeComposeModal);
+emailComposeClose.addEventListener('click', closeComposeModal);
+
+emailComposeSend.addEventListener('click', async () => {
+  const to = emailComposeTo.value.trim();
+  const subject = emailComposeSubject.value.trim();
+  const body = emailComposeBody.value;
+  if (!to) return;
+
+  try {
+    await window.slime.emailSend(currentEmailAccount, { to, subject, body });
+    closeComposeModal();
+  } catch (e) {
+    console.warn('[Slime] Email send failed:', e);
+  }
+});
+
+// Reply button
+emailReplyBtn.addEventListener('click', () => {
+  const from = emailReader.dataset.from || '';
+  const subject = emailReader.dataset.subject || '';
+  emailComposeTo.value = from;
+  emailComposeSubject.value = subject.startsWith('Re:') ? subject : 'Re: ' + subject;
+  emailComposeBody.value = '';
+  emailComposeModal.style.display = 'flex';
+  emailComposeBody.focus();
+});
+
+// Delete button
+emailDeleteBtn.addEventListener('click', async () => {
+  const uid = emailReader.dataset.uid;
+  const accountId = emailReader.dataset.accountId;
+  const folder = emailReader.dataset.folder;
+  if (!uid || !accountId) return;
+
+  try {
+    await window.slime.emailMessageDelete(accountId, folder, uid);
+    emailReader.style.display = 'none';
+    emailList.style.display = '';
+    loadEmailMessages(accountId, folder);
+  } catch (e) {
+    console.warn('[Slime] Email delete failed:', e);
+  }
+});
+
+// Account modal
+emailAccountsBtn.addEventListener('click', () => {
+  loadEmailAccountList();
+  emailAccountModal.style.display = 'flex';
+});
+
+emailAccountClose.addEventListener('click', () => {
+  emailAccountModal.style.display = 'none';
+});
+
+async function loadEmailAccountList() {
+  try {
+    emailAccounts = await window.slime.emailAccountsGet() || [];
+  } catch (e) {
+    emailAccounts = [];
+  }
+
+  emailAccountList.innerHTML = '';
+  emailAccounts.forEach(acct => {
+    const el = document.createElement('div');
+    el.className = 'email-acct-item';
+    el.innerHTML = `
+      <div class="email-acct-item-info">
+        <span class="email-acct-item-label">${escapeHtml(acct.label || acct.email)}</span>
+        <span class="email-acct-item-email">${escapeHtml(acct.email)}</span>
+      </div>
+      <button class="email-acct-remove" title="Remove account">&times;</button>
+    `;
+    el.querySelector('.email-acct-remove').addEventListener('click', async () => {
+      try {
+        await window.slime.emailAccountsRemove(acct.id);
+        loadEmailAccountList();
+        loadEmailPanel();
+      } catch (e) {
+        console.warn('[Slime] Failed to remove email account:', e);
+      }
+    });
+    emailAccountList.appendChild(el);
+  });
+
+  if (emailAccounts.length === 0) {
+    emailAccountList.innerHTML = '<div class="panel-empty" style="padding:12px;">No accounts configured</div>';
+  }
+}
+
+emailAcctTest.addEventListener('click', async () => {
+  const config = {
+    email: emailAcctEmail.value.trim(),
+    password: emailAcctPassword.value,
+    imapHost: emailAcctImapHost.value.trim(),
+    imapPort: parseInt(emailAcctImapPort.value) || 993,
+    smtpHost: emailAcctSmtpHost.value.trim(),
+    smtpPort: parseInt(emailAcctSmtpPort.value) || 465,
+  };
+  if (!config.email || !config.password || !config.imapHost) return;
+
+  const statusEl = document.getElementById('email-acct-status');
+  emailAcctTest.textContent = 'Testing...';
+  emailAcctTest.disabled = true;
+  statusEl.style.display = 'none';
+  try {
+    const result = await window.slime.emailAccountsTest({
+      username: config.email,
+      email: config.email,
+      password: config.password,
+      imap: { host: config.imapHost, port: config.imapPort },
+      smtp: { host: config.smtpHost, port: config.smtpPort },
+    });
+    if (result.success) {
+      emailAcctTest.textContent = 'Connected!';
+      statusEl.style.display = 'block';
+      statusEl.style.color = 'var(--accent)';
+      statusEl.textContent = 'IMAP & SMTP erfolgreich verbunden!';
+    } else {
+      emailAcctTest.textContent = 'Failed';
+      statusEl.style.display = 'block';
+      statusEl.style.color = 'var(--danger)';
+      statusEl.textContent = result.error || 'Verbindung fehlgeschlagen';
+    }
+  } catch (e) {
+    emailAcctTest.textContent = 'Failed';
+    statusEl.style.display = 'block';
+    statusEl.style.color = 'var(--danger)';
+    statusEl.textContent = e.message || 'Unbekannter Fehler';
+  }
+  setTimeout(() => {
+    emailAcctTest.textContent = 'Test Connection';
+    emailAcctTest.disabled = false;
+  }, 4000);
+});
+
+emailAcctSave.addEventListener('click', async () => {
+  const config = {
+    label: emailAcctLabel.value.trim(),
+    email: emailAcctEmail.value.trim(),
+    password: emailAcctPassword.value,
+    imapHost: emailAcctImapHost.value.trim(),
+    imapPort: parseInt(emailAcctImapPort.value) || 993,
+    smtpHost: emailAcctSmtpHost.value.trim(),
+    smtpPort: parseInt(emailAcctSmtpPort.value) || 465,
+  };
+  if (!config.email || !config.password || !config.imapHost) return;
+
+  try {
+    await window.slime.emailAccountsSave({
+      label: config.label,
+      username: config.email,
+      email: config.email,
+      password: config.password,
+      imap: { host: config.imapHost, port: config.imapPort },
+      smtp: { host: config.smtpHost, port: config.smtpPort },
+    });
+    // Clear form
+    emailAcctLabel.value = '';
+    emailAcctEmail.value = '';
+    emailAcctPassword.value = '';
+    emailAcctImapHost.value = '';
+    emailAcctImapPort.value = '';
+    emailAcctSmtpHost.value = '';
+    emailAcctSmtpPort.value = '';
+    loadEmailAccountList();
+    loadEmailPanel();
+  } catch (e) {
+    console.warn('[Slime] Failed to save email account:', e);
+  }
+});
+
+// Notification toggle
+emailNotifToggle.addEventListener('change', () => {
+  if (window.slime.emailNotificationsSet && currentEmailAccount) {
+    window.slime.emailNotificationsSet(currentEmailAccount, emailNotifToggle.checked);
+  }
+});
+
+// Push notification listener
+if (window.slime.onEmailNewMessage) {
+  window.slime.onEmailNewMessage((data) => {
+    updateEmailBadge(data.unreadCount || 0);
+    // Refresh list if currently viewing inbox
+    if (emailPanel.style.display !== 'none' && currentEmailFolder === 'INBOX') {
+      loadEmailMessages(currentEmailAccount, 'INBOX');
+    }
+  });
+}
+
+// ==========================================
 // Panel Helpers
 // ==========================================
 
@@ -2145,6 +2604,7 @@ function closeAllPanels() {
   downloadsPanel.style.display = 'none';
   passwordsPanel.style.display = 'none';
   if (macrosPanel) macrosPanel.style.display = 'none';
+  if (emailPanel) emailPanel.style.display = 'none';
 }
 
 // ==========================================
@@ -2455,7 +2915,7 @@ document.addEventListener('keydown', (e) => {
 // Close panels when clicking anywhere outside a panel
 document.addEventListener('mousedown', (e) => {
   const clickedPanel = e.target.closest('.panel-overlay');
-  const clickedSidebarBtn = e.target.closest('.sidebar-btn, #btn-bookmarks-panel, #btn-history, #btn-downloads, #btn-passwords, #macros-btn');
+  const clickedSidebarBtn = e.target.closest('.sidebar-btn, #btn-bookmarks-panel, #btn-history, #btn-downloads, #btn-passwords, #macros-btn, #btn-email');
   if (!clickedPanel && !clickedSidebarBtn) {
     closeAllPanels();
   }

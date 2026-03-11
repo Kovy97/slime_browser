@@ -145,4 +145,21 @@ contextBridge.exposeInMainWorld('slime', {
     ipcRenderer.on('google-login-complete', handler);
     return () => ipcRenderer.removeListener('google-login-complete', handler);
   },
+
+  // Email
+  emailAccountsGet: () => ipcRenderer.invoke('email-accounts-get'),
+  emailAccountsSave: (account) => ipcRenderer.invoke('email-accounts-save', account),
+  emailAccountsRemove: (id) => ipcRenderer.invoke('email-accounts-remove', id),
+  emailAccountsTest: (account) => ipcRenderer.invoke('email-accounts-test', account),
+  emailFoldersGet: (accountId) => ipcRenderer.invoke('email-folders-get', accountId),
+  emailMessagesGet: (accountId, folder, page) => ipcRenderer.invoke('email-messages-get', accountId, folder, page),
+  emailMessageGet: (accountId, folder, uid) => ipcRenderer.invoke('email-message-get', accountId, folder, uid),
+  emailMessageDelete: (accountId, folder, uid) => ipcRenderer.invoke('email-message-delete', accountId, folder, uid),
+  emailSend: (accountId, mail) => ipcRenderer.invoke('email-send', accountId, mail),
+  emailNotificationsSet: (accountId, enabled) => ipcRenderer.invoke('email-notifications-set', accountId, enabled),
+  onEmailNewMessage: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('email-new-message', handler);
+    return () => ipcRenderer.removeListener('email-new-message', handler);
+  },
 });

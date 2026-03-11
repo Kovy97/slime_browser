@@ -1,6 +1,6 @@
 {
   "name": "slime-browser",
-  "version": "1.6.3",
+  "version": "1.7.0",
   "description": "Slime Browser - A Chromium-based browser with built-in adblock and YouTube tools",
   "main": "src/main.js",
   "scripts": {
@@ -42,5 +42,10 @@
       "owner": "Kovy97",
       "repo": "slime_browser"
     }
+  },
+  "dependencies": {
+    "imapflow": "^1.2.13",
+    "mailparser": "^3.9.4",
+    "nodemailer": "^8.0.2"
   }
 }

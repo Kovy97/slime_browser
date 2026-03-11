@@ -4,9 +4,31 @@ const fs = require('fs');
 const originalFs = require('original-fs');
 const { setupAdblocker } = require('./adblocker/engine');
 const { getYouTubeScript } = require('./youtube/inject');
+const { setupEmail } = require('./email/client');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const pkg = require('../package.json');
+
+// Catch uncaught exceptions from network libs (e.g. ImapFlow ECONNRESET)
+// to prevent Electron from showing fatal error dialogs
+process.on('uncaughtException', (err) => {
+  const ignorable = ['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'];
+  if (ignorable.some(code => err.message?.includes(code) || err.code === code)) {
+    console.log('[Slime] Ignored network error:', err.message);
+    return;
+  }
+  console.error('[Slime] Uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const msg = reason?.message || String(reason);
+  const ignorable = ['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND'];
+  if (ignorable.some(code => msg.includes(code))) {
+    console.log('[Slime] Ignored unhandled rejection:', msg);
+    return;
+  }
+  console.error('[Slime] Unhandled rejection:', reason);
+});
 
 // ==========================================
 // IPC Input Validation Helpers
@@ -803,6 +825,9 @@ app.whenReady().then(async () => {
     ipcMain.handle('downloads-get', () => Array.from(downloads.values()));
 
     createWindow();
+
+    // Email client (IMAP/SMTP)
+    setupEmail(ipcMain, encryptPassword, decryptPassword, readJSON, writeJSON, dataPath, () => mainWindow);
 
     // ==========================================
     // Asar Hot-Update System
