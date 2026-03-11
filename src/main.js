@@ -741,6 +741,9 @@ ipcMain.handle('download-show', (_, filePath) => {
 
 app.whenReady().then(async () => {
   try {
+    // Apply pending asar update from previous download (before anything else)
+    applyPendingUpdate();
+
     const webviewSession = session.fromPartition('persist:slime');
 
     // Set Chrome user-agent so Google/YouTube trust the browser
