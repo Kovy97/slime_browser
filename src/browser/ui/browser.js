@@ -18,6 +18,9 @@ let webviewPreloadPath = null;
 const DEFAULT_URL = 'slime://newtab';
 let SEARCH_ENGINE = 'https://www.google.com/search?q=';
 
+// Closed tabs stack (for Ctrl+Shift+T reopen)
+const closedTabs = [];
+
 // Tab preview state
 const tabThumbnailCache = new Map();
 let tabPreviewTimeout = null;
@@ -31,7 +34,7 @@ const SEARCH_ENGINES = {
 // Load YouTube script from main process
 window.slime.getYouTubeScript().then(script => {
   youtubeScript = script;
-});
+}).catch(() => {});
 
 // HTTP Basic Auth dialog
 const authDialog = document.getElementById('auth-dialog');
@@ -40,8 +43,10 @@ const authPassword = document.getElementById('auth-password');
 const authSubmit = document.getElementById('auth-submit');
 const authCancel = document.getElementById('auth-cancel');
 const authMessage = document.getElementById('auth-message');
+let currentAuthRequestId = null;
 
 window.slime.onAuthRequest((data) => {
+  currentAuthRequestId = data.requestId;
   authMessage.textContent = `${data.host} requires authentication${data.realm ? ' (' + data.realm + ')' : ''}`;
   authUsername.value = '';
   authPassword.value = '';
@@ -50,20 +55,22 @@ window.slime.onAuthRequest((data) => {
 });
 
 function submitAuth() {
-  window.slime.authRespond({ username: authUsername.value, password: authPassword.value });
+  window.slime.authRespond(currentAuthRequestId, { username: authUsername.value, password: authPassword.value });
   authDialog.style.display = 'none';
+  currentAuthRequestId = null;
 }
 
 function cancelAuth() {
-  window.slime.authRespond(null);
+  window.slime.authRespond(currentAuthRequestId, null);
   authDialog.style.display = 'none';
+  currentAuthRequestId = null;
 }
 
-authSubmit.addEventListener('click', submitAuth);
-authCancel.addEventListener('click', cancelAuth);
-authPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
-authUsername.addEventListener('keydown', (e) => { if (e.key === 'Enter') authPassword.focus(); });
-authDialog.addEventListener('keydown', (e) => { if (e.key === 'Escape') cancelAuth(); });
+if (authSubmit) authSubmit.addEventListener('click', submitAuth);
+if (authCancel) authCancel.addEventListener('click', cancelAuth);
+if (authPassword) authPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
+if (authUsername) authUsername.addEventListener('keydown', (e) => { if (e.key === 'Enter') authPassword.focus(); });
+if (authDialog) authDialog.addEventListener('keydown', (e) => { if (e.key === 'Escape') cancelAuth(); });
 
 // Handle context menu actions from main process
 window.slime.onContextAction((data) => {
@@ -139,12 +146,15 @@ function createTab(url = DEFAULT_URL, options = {}) {
     isIncognito,
   };
 
+  // Add to tabs array and tabMap BEFORE creating webview,
+  // so createWebview can look up the tab (for incognito partition, listeners, etc.)
+  tabs.push(tab);
+  tabMap.set(id, tab);
+
   if (!tab.isNewTab) {
     tab.webview = createWebview(id, url);
   }
 
-  tabs.push(tab);
-  tabMap.set(id, tab);
   renderTab(tab);
   switchToTab(id);
 
@@ -156,6 +166,12 @@ function closeTab(id) {
   if (index === -1) return;
 
   const tab = tabs[index];
+
+  // Save URL for Ctrl+Shift+T reopen (skip blank new-tab pages)
+  if (tab.url && tab.url !== DEFAULT_URL) {
+    closedTabs.push(tab.url);
+    if (closedTabs.length > 10) closedTabs.shift();
+  }
 
   if (tab.webview) {
     tab.webview.removeEventListener('page-title-updated', tab._listeners?.titleUpdated);
@@ -285,7 +301,7 @@ function renderTab(tab) {
   el.addEventListener('drop', (e) => {
     e.preventDefault();
     el.classList.remove('drag-over-top', 'drag-over-bottom');
-    const draggedId = e.dataTransfer.getData('text/plain');
+    const draggedId = parseInt(e.dataTransfer.getData('text/plain'), 10);
     if (draggedId === tab.id) return;
 
     const srcIdx = tabs.findIndex(t => t.id === draggedId);
@@ -764,6 +780,7 @@ function recordHistory(url, title) {
 }
 
 async function loadHistoryPanel(query = '') {
+  try {
   const items = await window.slime.historyGet(query);
   historyList.innerHTML = '';
 
@@ -798,6 +815,7 @@ async function loadHistoryPanel(query = '') {
     fragment.appendChild(el);
   });
   historyList.appendChild(fragment);
+  } catch(e) { console.error('Failed to load history:', e); }
 }
 
 historyBtn.addEventListener('click', () => {
@@ -840,6 +858,7 @@ let _lastBookmarkCheckUrl = null;
 let _lastBookmarkCheckResult = false;
 
 async function updateBookmarkButton() {
+  try {
   const tab = tabMap.get(activeTabId);
   if (!tab || tab.isNewTab || !tab.url) {
     bookmarkBtn.classList.remove('bookmarked');
@@ -855,6 +874,7 @@ async function updateBookmarkButton() {
   _lastBookmarkCheckUrl = tab.url;
   _lastBookmarkCheckResult = isBookmarked;
   bookmarkBtn.classList.toggle('bookmarked', isBookmarked);
+  } catch(e) {}
 }
 
 bookmarkBtn.addEventListener('click', async () => {
@@ -872,6 +892,7 @@ bookmarkBtn.addEventListener('click', async () => {
 });
 
 async function loadBookmarksPanel(query = '') {
+  try {
   let bookmarks = await window.slime.bookmarksGet();
 
   if (query) {
@@ -922,6 +943,7 @@ async function loadBookmarksPanel(query = '') {
     fragment.appendChild(el);
   });
   bookmarksList.appendChild(fragment);
+  } catch(e) { console.error('Failed to load bookmarks:', e); }
 }
 
 bookmarksPanelBtn.addEventListener('click', () => {
@@ -1256,6 +1278,7 @@ passwordBarDismiss.addEventListener('click', () => {
 
 // Passwords Panel
 async function loadPasswordsPanel(query = '') {
+  try {
   let passwords = await window.slime.passwordsGet();
 
   if (query) {
@@ -1302,7 +1325,7 @@ async function loadPasswordsPanel(query = '') {
 
     el.querySelector('.panel-item-copy').addEventListener('click', (e) => {
       e.stopPropagation();
-      navigator.clipboard.writeText(item.password);
+      navigator.clipboard.writeText(item.password).catch(() => {});
       el.querySelector('.panel-item-copy').title = 'Copied!';
       setTimeout(() => { el.querySelector('.panel-item-copy').title = 'Copy password'; }, 2000);
     });
@@ -1315,6 +1338,7 @@ async function loadPasswordsPanel(query = '') {
 
     passwordsList.appendChild(el);
   });
+  } catch(e) { console.error('Failed to load passwords:', e); }
 }
 
 passwordsBtn.addEventListener('click', () => {
@@ -1444,9 +1468,14 @@ function populateSettingsUI(s) {
 }
 
 async function saveSetting(key, value) {
+  const oldValue = currentSettings[key];
   currentSettings[key] = value;
-  currentSettings = await window.slime.settingsSave(currentSettings);
-  applySettings(currentSettings);
+  try {
+    currentSettings = await window.slime.settingsSave(currentSettings);
+    applySettings(currentSettings);
+  } catch(e) {
+    currentSettings[key] = oldValue; // revert on failure
+  }
 }
 
 function showSettings() {
@@ -2288,22 +2317,38 @@ let currentEmailFolder = 'INBOX';
 let emailAccounts = [];
 
 function sanitizeEmailHtml(html) {
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  // Remove script tags
-  div.querySelectorAll('script').forEach(el => el.remove());
-  // Remove on* event attributes
-  div.querySelectorAll('*').forEach(el => {
-    for (const attr of [...el.attributes]) {
-      if (attr.name.startsWith('on') || (attr.name === 'href' && attr.value.trim().toLowerCase().startsWith('javascript:'))) {
-        el.removeAttribute(attr.name);
-      }
-      if (attr.name === 'src' && attr.value.trim().toLowerCase().startsWith('javascript:')) {
-        el.removeAttribute(attr.name);
-      }
-    }
+  if (!html) return '';
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  // Remove dangerous elements
+  const dangerous = ['script', 'iframe', 'object', 'embed', 'applet', 'form', 'input', 'textarea', 'button', 'select'];
+  dangerous.forEach(tag => {
+    doc.querySelectorAll(tag).forEach(el => el.remove());
   });
-  return div.innerHTML;
+
+  // Remove all event handler attributes and javascript: URLs
+  doc.querySelectorAll('*').forEach(el => {
+    const attrs = [...el.attributes];
+    attrs.forEach(attr => {
+      if (attr.name.startsWith('on') ||
+          (attr.value && attr.value.trim().toLowerCase().startsWith('javascript:'))) {
+        el.removeAttribute(attr.name);
+      }
+    });
+    // Remove javascript: from href/src/action
+    ['href', 'src', 'action', 'formaction', 'xlink:href'].forEach(a => {
+      const val = el.getAttribute(a);
+      if (val && val.trim().toLowerCase().startsWith('javascript:')) {
+        el.removeAttribute(a);
+      }
+    });
+  });
+
+  // Remove style elements (can contain expressions/imports)
+  doc.querySelectorAll('style').forEach(el => el.remove());
+
+  return doc.body.innerHTML;
 }
 
 function updateEmailBadge(count) {
@@ -2758,6 +2803,7 @@ const notesEditorSave = document.getElementById('notes-editor-save');
 let currentNoteId = null;
 
 async function loadNotesPanel(query = '') {
+  try {
   const notes = await window.slime.notesGet();
   notesList.innerHTML = '';
 
@@ -2796,6 +2842,7 @@ async function loadNotesPanel(query = '') {
     fragment.appendChild(el);
   });
   notesList.appendChild(fragment);
+  } catch(e) { console.error('Failed to load notes:', e); }
 }
 
 function openNoteEditor(note) {
@@ -3135,6 +3182,8 @@ if (newIncognitoBtn) {
 // ==========================================
 
 function openFindBar() {
+  const tab = tabMap.get(activeTabId);
+  if (!tab?.webview) return; // Can't search on new tab page
   findBar.style.display = 'flex';
   findInput.focus();
   findInput.select();
@@ -3163,30 +3212,68 @@ function findInPage(forward = true, findNext = false) {
   tab.webview.findInPage(text, { forward, findNext });
 }
 
-findInput.addEventListener('input', () => {
-  findInPage(true, false);
-});
+if (findInput) {
+  findInput.addEventListener('input', () => {
+    findInPage(true, false);
+  });
 
-findInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    findInPage(!e.shiftKey, true);
-  }
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    closeFindBar();
-  }
-});
+  findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      findInPage(!e.shiftKey, true);
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeFindBar();
+    }
+  });
+}
 
-findNext.addEventListener('click', () => findInPage(true, true));
-findPrev.addEventListener('click', () => findInPage(false, true));
-findClose.addEventListener('click', () => closeFindBar());
+if (findNext) findNext.addEventListener('click', () => findInPage(true, true));
+if (findPrev) findPrev.addEventListener('click', () => findInPage(false, true));
+if (findClose) findClose.addEventListener('click', () => closeFindBar());
 
 document.addEventListener('keydown', (e) => {
+  // --- Input focus guard ---
+  const inInput = document.activeElement &&
+    (document.activeElement.tagName === 'INPUT' ||
+     document.activeElement.tagName === 'TEXTAREA' ||
+     document.activeElement.isContentEditable);
+
+  // Escape always works (close find bar / panels / blur input)
+  if (e.key === 'Escape') {
+    if (findBar.style.display !== 'none') {
+      closeFindBar();
+    }
+    closeAllPanels();
+    if (inInput) document.activeElement.blur();
+    return;
+  }
+
+  // Ctrl+L always works (focus URL bar even from an input)
+  if (e.ctrlKey && e.key === 'l') {
+    e.preventDefault();
+    urlBar.focus();
+    urlBar.select();
+    return;
+  }
+
+  // All other shortcuts are suppressed when typing in an input
+  if (inInput) return;
+
+  // --- Ctrl+Shift shortcuts ---
   if (e.ctrlKey && e.shiftKey && e.key === 'N') {
     e.preventDefault();
     createTab(DEFAULT_URL, { incognito: true });
   }
+  if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+    e.preventDefault();
+    const url = closedTabs.pop();
+    if (url) createTab(url);
+  }
+
+  // --- Ctrl shortcuts ---
   if (e.ctrlKey && !e.shiftKey && e.key === 't') {
     e.preventDefault();
     createTab();
@@ -3194,11 +3281,6 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === 'w') {
     e.preventDefault();
     if (activeTabId) closeTab(activeTabId);
-  }
-  if (e.ctrlKey && e.key === 'l') {
-    e.preventDefault();
-    urlBar.focus();
-    urlBar.select();
   }
   if (e.ctrlKey && e.key === 'd') {
     e.preventDefault();
@@ -3208,24 +3290,86 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     openFindBar();
   }
-  if (e.key === 'F5') {
+  // --- Reload: F5 or Ctrl+R ---
+  if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) {
     e.preventDefault();
     const tab = tabMap.get(activeTabId);
     if (tab?.webview) tab.webview.reload();
   }
+
+  // --- Navigation: Alt+Left / Alt+Right ---
   if (e.altKey && e.key === 'ArrowLeft') {
+    e.preventDefault();
     const tab = tabMap.get(activeTabId);
     try { if (tab?.webview?.canGoBack()) tab.webview.goBack(); } catch(ex) { console.warn('[Slime]', ex.message || ex); }
   }
   if (e.altKey && e.key === 'ArrowRight') {
+    e.preventDefault();
     const tab = tabMap.get(activeTabId);
     try { if (tab?.webview?.canGoForward()) tab.webview.goForward(); } catch(ex) { console.warn('[Slime]', ex.message || ex); }
   }
-  if (e.key === 'Escape') {
-    if (findBar.style.display !== 'none') {
-      closeFindBar();
+  // --- Ctrl+Tab / Ctrl+Shift+Tab: cycle tabs ---
+  if (e.ctrlKey && e.key === 'Tab') {
+    e.preventDefault();
+    const idx = tabs.findIndex(t => t.id === activeTabId);
+    if (e.shiftKey) {
+      const prev = (idx - 1 + tabs.length) % tabs.length;
+      switchToTab(tabs[prev].id);
+    } else {
+      const next = (idx + 1) % tabs.length;
+      switchToTab(tabs[next].id);
     }
-    closeAllPanels();
+  }
+
+  // --- Ctrl+1 through Ctrl+9: direct tab switching ---
+  if (e.ctrlKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
+    e.preventDefault();
+    const n = parseInt(e.key);
+    if (n === 9 && tabs.length > 0) switchToTab(tabs[tabs.length - 1].id);
+    else if (n <= tabs.length) switchToTab(tabs[n - 1].id);
+  }
+});
+
+// Handle keyboard shortcuts forwarded from main process (when webview has focus)
+window.slime.onShortcut(({ key, ctrl, shift, alt }) => {
+  if (ctrl && shift && key === 'n') { createTab(DEFAULT_URL, { incognito: true }); return; }
+  if (ctrl && shift && key === 't') { const url = closedTabs.pop(); if (url) createTab(url); return; }
+  if (ctrl && key === 't') { createTab(); return; }
+  if (ctrl && key === 'w') { closeTab(activeTabId); return; }
+  if (ctrl && key === 'l') { urlBar.focus(); urlBar.select(); return; }
+  if (ctrl && key === 'd') { bookmarkBtn.click(); return; }
+  if (ctrl && key === 'f') { openFindBar(); return; }
+  if (ctrl && key === 'r' || key === 'f5') {
+    const tab = tabMap.get(activeTabId);
+    if (tab?.webview) try { tab.webview.reload(); } catch(e) {}
+    return;
+  }
+  if (alt && key === 'arrowleft') {
+    const tab = tabMap.get(activeTabId);
+    if (tab?.webview) try { tab.webview.goBack(); } catch(e) {}
+    return;
+  }
+  if (alt && key === 'arrowright') {
+    const tab = tabMap.get(activeTabId);
+    if (tab?.webview) try { tab.webview.goForward(); } catch(e) {}
+    return;
+  }
+  if (ctrl && key === 'tab') {
+    const idx = tabs.findIndex(t => t.id === activeTabId);
+    if (shift) {
+      const prev = (idx - 1 + tabs.length) % tabs.length;
+      switchToTab(tabs[prev].id);
+    } else {
+      const next = (idx + 1) % tabs.length;
+      switchToTab(tabs[next].id);
+    }
+    return;
+  }
+  if (ctrl && /^[1-9]$/.test(key)) {
+    const n = parseInt(key);
+    if (n === 9) { switchToTab(tabs[tabs.length - 1].id); }
+    else if (n <= tabs.length) { switchToTab(tabs[n - 1].id); }
+    return;
   }
 });
 
@@ -3312,6 +3456,7 @@ function formatAttachmentSize(bytes) {
 // ==========================================
 
 async function init() {
+  try {
   // Load webview preload path and settings
   webviewPreloadPath = await window.slime.getWebviewPreloadPath();
   await loadSettings();
@@ -3379,6 +3524,9 @@ async function init() {
       tab.webview.reload();
     }
   });
+  } catch(e) {
+    console.error('Failed to initialize:', e);
+  }
 }
 
 init();

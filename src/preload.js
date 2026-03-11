@@ -117,7 +117,10 @@ contextBridge.exposeInMainWorld('slime', {
     ipcRenderer.on('auth-request', handler);
     return () => ipcRenderer.removeListener('auth-request', handler);
   },
-  authRespond: (response) => ipcRenderer.send('auth-response', response),
+  authRespond: (requestId, response) => {
+    if (typeof requestId !== 'number') return;
+    ipcRenderer.send(`auth-response-${requestId}`, response);
+  },
 
   // Context menu
   showContextMenu: (params) => ipcRenderer.send('show-context-menu', params),
@@ -125,6 +128,15 @@ contextBridge.exposeInMainWorld('slime', {
     const handler = (_, data) => callback(data);
     ipcRenderer.on('context-action', handler);
     return () => ipcRenderer.removeListener('context-action', handler);
+  },
+
+  // Keyboard shortcuts forwarded from main process (when webview has focus)
+  onShortcut: (cb) => ipcRenderer.on('shortcut', (_, data) => cb(data)),
+
+  // Open external URL in system browser (protocol-restricted)
+  openExternal: (url) => {
+    if (typeof url !== 'string') return;
+    return ipcRenderer.invoke('open-external', url);
   },
 
   // Open URL from external source (default browser)

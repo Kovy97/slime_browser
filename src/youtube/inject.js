@@ -22,7 +22,13 @@ const YOUTUBE_TOOLS_CSS = `
   ytd-player-legacy-desktop-watch-ads-renderer,
   ytd-display-ad-renderer, ytd-rich-item-renderer:has(ytd-display-ad-renderer),
   .ytp-ad-action-interstitial, .ytp-ad-image-overlay,
-  .ytp-ad-overlay-ad-info-button-container {
+  .ytp-ad-overlay-ad-info-button-container,
+  .ytp-ad-overlay-slot,
+  ytd-merch-shelf-renderer,
+  ytd-companion-slot-renderer,
+  ytd-video-masthead-ad-advertiser-info-renderer,
+  ytd-primetime-promo-renderer,
+  ytd-reel-video-renderer[is-ad] {
     display: none !important;
   }
 
@@ -135,6 +141,7 @@ const YOUTUBE_TOOLS_SCRIPT = `
   document.head.appendChild(style);
 
   let isReloadingVideo = false;
+  let savedVideoTime = 0;
 
   // ===========================================
   // HELPER: Get video ID from URL
@@ -267,22 +274,33 @@ const YOUTUBE_TOOLS_SCRIPT = `
 
     const isAd = player.classList.contains('ad-showing') ||
                  player.classList.contains('ad-interrupting');
-    if (!isAd) return;
+    if (!isAd) {
+      // Ad class removed — reset the flag so next ad can be caught
+      isReloadingVideo = false;
+      return;
+    }
     if (isReloadingVideo) return;
 
     const videoId = getVideoId();
     if (!videoId) return;
 
+    // Save current video time before bypass so mid-roll ads resume correctly
+    const video = document.querySelector('video');
+    if (video && video.currentTime > 0 && !isNaN(video.currentTime)) {
+      savedVideoTime = video.currentTime;
+    }
+
     isReloadingVideo = true;
+
+    // Determine start time: use savedVideoTime for mid-rolls, fall back to URL param for initial load
+    const startTime = savedVideoTime > 0 ? savedVideoTime : getTimestamp();
 
     // Method 1: Use YouTube's internal player API to directly load the video
     // This completely bypasses the ad pipeline
     try {
       if (typeof player.loadVideoById === 'function') {
-        const startTime = getTimestamp();
         player.loadVideoById(videoId, startTime);
-        console.log('[Slime] Ad bypassed via loadVideoById:', videoId);
-        setTimeout(() => { isReloadingVideo = false; }, 1500);
+        console.log('[Slime] Ad bypassed via loadVideoById:', videoId, 'at', startTime);
         return;
       }
     } catch(e) {}
@@ -293,19 +311,28 @@ const YOUTUBE_TOOLS_SCRIPT = `
         player.cancelPlayback();
       }
       if (typeof player.loadVideoById === 'function') {
-        player.loadVideoById(videoId, getTimestamp());
-        console.log('[Slime] Ad bypassed via cancel+reload:', videoId);
-        setTimeout(() => { isReloadingVideo = false; }, 1500);
+        player.loadVideoById(videoId, startTime);
+        console.log('[Slime] Ad bypassed via cancel+reload:', videoId, 'at', startTime);
         return;
       }
     } catch(e) {}
 
     // Method 3: Fast-forward fallback (least preferred, but better than nothing)
     try {
-      const video = document.querySelector('video');
       if (video && video.duration > 0 && isFinite(video.duration)) {
-        video.currentTime = video.duration;
+        const wasMuted = video.muted;
         video.muted = true;
+        video.currentTime = video.duration;
+
+        // Restore mute state once the ad is actually gone
+        const unmuteCheck = setInterval(() => {
+          if (!player.classList.contains('ad-showing') && !player.classList.contains('ad-interrupting')) {
+            video.muted = wasMuted;
+            clearInterval(unmuteCheck);
+          }
+        }, 200);
+        // Safety timeout: stop checking after 30s to avoid leaking intervals
+        setTimeout(() => clearInterval(unmuteCheck), 30000);
       }
       // Also click skip button if available
       const skipBtn = document.querySelector(
@@ -313,8 +340,6 @@ const YOUTUBE_TOOLS_SCRIPT = `
       );
       if (skipBtn) skipBtn.click();
     } catch(e) {}
-
-    setTimeout(() => { isReloadingVideo = false; }, 1500);
   }
 
   // MutationObserver: React to ad-showing class instantly

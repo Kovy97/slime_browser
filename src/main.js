@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net, clipboard, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu, shell, safeStorage, dialog, net, clipboard, Notification, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const originalFs = require('original-fs');
@@ -87,7 +87,7 @@ if (!gotLock) {
 
 app.on('second-instance', (_, argv) => {
   const url = getUrlFromArgs(argv.slice(1));
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
     if (url) mainWindow.webContents.send('open-url', url);
@@ -116,6 +116,7 @@ function readJSON(filename, fallback) {
     return data;
   } catch (e) {
     const result = typeof fallback === 'function' ? fallback() : fallback;
+    jsonCache.set(filename, result);
     return result;
   }
 }
@@ -338,8 +339,8 @@ ipcMain.handle('macros-save', (_, macros) => {
 // Tab preview capture
 ipcMain.handle('capture-tab', async (_, webContentsId) => {
   try {
-    const wc = require('electron').webContents.fromId(webContentsId);
-    if (!wc || wc.isDestroyed()) return null;
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed() || wc.getType() !== 'webview') return null;
     const image = await wc.capturePage();
     const resized = image.resize({ width: 300 });
     return resized.toDataURL();
@@ -442,11 +443,43 @@ function createWindow() {
   });
 
   mainWindow.on('maximize', () => {
+    if (mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('window-state', 'maximized');
   });
 
   mainWindow.on('unmaximize', () => {
+    if (mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('window-state', 'normal');
+  });
+
+  // Forward keyboard shortcuts to renderer even when webview has focus
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const ctrl = input.control || input.meta;
+    const shift = input.shift;
+    const alt = input.alt;
+    const key = input.key.toLowerCase();
+
+    let handled = false;
+
+    if (ctrl && !shift && key === 't') handled = true;  // New tab
+    if (ctrl && !shift && key === 'w') handled = true;  // Close tab
+    if (ctrl && !shift && key === 'l') handled = true;  // Focus URL bar
+    if (ctrl && !shift && key === 'f') handled = true;  // Find
+    if (ctrl && !shift && key === 'd') handled = true;  // Bookmark
+    if (ctrl && !shift && key === 'r') handled = true;  // Reload
+    if (ctrl && shift && key === 'n') handled = true;   // Incognito
+    if (ctrl && shift && key === 't') handled = true;   // Reopen closed tab
+    if (!ctrl && !alt && key === 'f5') handled = true;  // Reload
+    if (alt && !ctrl && key === 'arrowleft') handled = true;  // Back
+    if (alt && !ctrl && key === 'arrowright') handled = true; // Forward
+    if (ctrl && key === 'tab') handled = true;           // Tab cycling
+    if (ctrl && !shift && /^[1-9]$/.test(key)) handled = true; // Tab 1-9
+
+    if (handled) {
+      event.preventDefault();
+      mainWindow.webContents.send('shortcut', { key, ctrl, shift, alt });
+    }
   });
 }
 
@@ -498,6 +531,9 @@ ipcMain.handle('open-google-login', async (_, url) => {
     title: 'Google Sign-In',
     webPreferences: {
       partition: 'persist:slime-login',
+      // contextIsolation OFF intentionally - login-preload.js needs direct DOM access
+      // to override navigator properties for Firefox disguise (Google login detection).
+      // sandbox OFF for the same reason. nodeIntegration remains OFF for safety.
       contextIsolation: false,
       nodeIntegration: false,
       sandbox: false,
@@ -556,6 +592,7 @@ ipcMain.handle('open-google-login', async (_, url) => {
 
 // Context menu for webviews
 ipcMain.on('show-context-menu', (_, params) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   const { x, y, linkURL, srcURL, pageURL, selectionText, isEditable, mediaType } = params || {};
 
   const template = [];
@@ -623,6 +660,7 @@ ipcMain.handle('get-blocked-count', () => blockedCount);
 // System info (RAM usage)
 // Use PowerShell to get actual Private Bytes (matches Task Manager)
 let cachedSlimeMB = Math.round(process.memoryUsage().rss / (1024 * 1024));
+let psFailCount = 0;
 
 function refreshSlimeMemory() {
   execFile('powershell.exe', [
@@ -631,12 +669,25 @@ function refreshSlimeMemory() {
   ], { timeout: 5000 }, (err, stdout) => {
     if (!err && stdout.trim()) {
       cachedSlimeMB = parseInt(stdout.trim()) || cachedSlimeMB;
+      psFailCount = 0;
+    } else {
+      psFailCount++;
     }
   });
 }
 
 refreshSlimeMemory();
-setInterval(refreshSlimeMemory, 10000);
+setInterval(() => {
+  if (psFailCount < 3) {
+    refreshSlimeMemory();
+  }
+}, 10000);
+// Slower fallback interval for when PowerShell is repeatedly failing
+setInterval(() => {
+  if (psFailCount >= 3) {
+    refreshSlimeMemory();
+  }
+}, 60000);
 
 ipcMain.handle('get-system-info', () => {
   const totalMem = os.totalmem();
@@ -654,6 +705,16 @@ ipcMain.on('increment-blocked', () => {
 
 // YouTube script injection
 ipcMain.handle('get-youtube-script', () => getYouTubeScript());
+
+// Open external URL (protocol-restricted)
+ipcMain.handle('open-external', (_, url) => {
+  if (!url || typeof url !== 'string') return;
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) return;
+    shell.openExternal(url);
+  } catch (e) { /* invalid URL */ }
+});
 
 // Download management (restricted to safe directories)
 ipcMain.handle('download-open', (_, filePath) => {
@@ -829,16 +890,19 @@ app.whenReady().then(async () => {
     });
 
     // HTTP Basic/Digest Auth popup
+    let authRequestId = 0;
     app.on('login', (event, webContents, details, authInfo, callback) => {
       event.preventDefault();
       if (!mainWindow) return callback();
+      const requestId = ++authRequestId;
       mainWindow.webContents.send('auth-request', {
         url: details.url,
         host: authInfo.host,
         realm: authInfo.realm,
         scheme: authInfo.scheme,
+        requestId,
       });
-      ipcMain.once('auth-response', (_, response) => {
+      ipcMain.once(`auth-response-${requestId}`, (_, response) => {
         if (response && response.username) {
           callback(response.username, response.password);
         } else {
@@ -1030,14 +1094,16 @@ function checkForAsarUpdate() {
           return;
         }
 
-        dialog.showMessageBox(mainWindow, {
+        const dialogOpts = {
           type: 'info',
           title: 'Update verfügbar',
           message: `Slime Browser ${latest} ist verfügbar! (Aktuell: ${pkg.version})`,
           detail: 'Das Update wird im Hintergrund heruntergeladen und beim Neustart angewendet.',
           buttons: ['Jetzt updaten', 'Später'],
           defaultId: 0,
-        }).then(({ response: btn }) => {
+        };
+        const dialogPromise = mainWindow ? dialog.showMessageBox(mainWindow, dialogOpts) : dialog.showMessageBox(dialogOpts);
+        dialogPromise.then(({ response: btn }) => {
           if (btn === 0) downloadAsarUpdate(asarAsset.browser_download_url, latest);
         });
       } catch (e) {
@@ -1049,7 +1115,7 @@ function checkForAsarUpdate() {
   request.end();
 }
 
-function downloadAsarUpdate(url, version) {
+function downloadAsarUpdate(url, version, maxRedirects = 5) {
   const updateDir = path.join(app.getPath('userData'), 'pending-update');
   if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
 
@@ -1064,8 +1130,13 @@ function downloadAsarUpdate(url, version) {
     // Handle GitHub redirect
     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
       file.close();
+      if (maxRedirects <= 0) {
+        console.log('[Slime Updater] Too many redirects, aborting update');
+        fs.unlink(tempPath, () => {});
+        return;
+      }
       const redirectUrl = Array.isArray(response.headers.location) ? response.headers.location[0] : response.headers.location;
-      downloadAsarUpdate(redirectUrl, version);
+      downloadAsarUpdate(redirectUrl, version, maxRedirects - 1);
       return;
     }
 
@@ -1073,15 +1144,22 @@ function downloadAsarUpdate(url, version) {
     const MAX_UPDATE_SIZE = 10 * 1024 * 1024; // 10MB
     if (totalBytes > MAX_UPDATE_SIZE) {
       file.close();
+      fs.unlink(tempPath, () => {});
       console.log('[Slime Updater] Update too large, skipping');
       return;
     }
     let receivedBytes = 0;
+    let aborted = false;
 
     response.on('data', (chunk) => {
+      if (aborted) return;
       receivedBytes += chunk.length;
       if (receivedBytes > MAX_UPDATE_SIZE) {
-        file.close();
+        aborted = true;
+        response.destroy();
+        file.close(() => {
+          fs.unlink(tempPath, () => {});
+        });
         console.log('[Slime Updater] Update too large during download, skipping');
         return;
       }
@@ -1093,6 +1171,7 @@ function downloadAsarUpdate(url, version) {
     });
 
     response.on('end', () => {
+      if (aborted) return;
       file.end(() => {
         fs.writeFileSync(versionPath, version, 'utf-8');
         // Log SHA256 checksum for integrity verification
@@ -1104,14 +1183,16 @@ function downloadAsarUpdate(url, version) {
           console.log(`[Slime Updater] Downloaded v${version} app.asar (${receivedBytes} bytes, checksum unavailable)`);
         }
 
-        dialog.showMessageBox(mainWindow, {
+        const dialogOpts = {
           type: 'info',
           title: 'Update bereit',
           message: `Slime Browser ${version} wurde heruntergeladen.`,
           detail: 'Jetzt neu starten um das Update anzuwenden?',
           buttons: ['Jetzt neu starten', 'Beim nächsten Start'],
           defaultId: 0,
-        }).then(({ response: btn }) => {
+        };
+        const dialogPromise = mainWindow ? dialog.showMessageBox(mainWindow, dialogOpts) : dialog.showMessageBox(dialogOpts);
+        dialogPromise.then(({ response: btn }) => {
           if (btn === 0) applyUpdateAndRestart();
         });
       });

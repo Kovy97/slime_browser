@@ -67,6 +67,16 @@ const BLOCK_DOMAINS = new Set([
   // Note: uimserv.net and ui-portal.de are United Internet CDNs used for
   // both ads AND legitimate site assets (CSS, JS) — do NOT block them
 
+  // Social media / platform ad & tracking pixels
+  'ads.microsoft.com', 'bat.bing.com',
+  'analytics.tiktok.com', 'ads-api.twitter.com', 'analytics.twitter.com',
+  'ads.linkedin.com', 'tr.snapchat.com', 'connect.facebook.net',
+  'events.redditmedia.com', 'ct.pinterest.com',
+  'gemini.yahoo.com', 'unityads.unity3d.com',
+
+  // Fingerprinting
+  'fingerprintjs.com',
+
   // Popup/redirect
   'popads.net', 'popcash.net', 'propellerads.com',
   'revcontent.com', 'revjet.com',
@@ -107,32 +117,24 @@ const BLOCK_REGEX = new RegExp([
   '\\/banner[-_]?ad',
   '\\/click[-_]?track',
   '\\/doubleclick',
-  '\\/interstitial',
+  '\\/ads?\\/interstitial',
   '\\/pop[-_]?under',
   '\\/prebid',
   '\\/promo[-_]?ad',
   '\\/tracking[-_]?pixel',
-  '[?&]ad_',
+  '[?&]ad_(banner|click|slot|unit|zone|type|id)=',
   '[?&]adid=',
   '[?&]ad_type=',
   '[?&]click_url=',
   '\\/beacon\\.',
-  '\\/collect\\?',
+  'google-analytics\\.com\\/collect\\?',
+  '\\/analytics\\/collect\\?',
 ].join('|'), 'i');
 
-// Combined whitelist regex — single test per URL
+// Hostname-only whitelist — tested against extracted hostname
 const WHITELIST_REGEX = new RegExp([
-  'googleapis\\.com\\/css',
-  'googleapis\\.com\\/js',
   'gstatic\\.com',
-  'google\\.com\\/recaptcha',
-  'google\\.com\\/maps',
   'googlevideo\\.com',
-  'youtube\\.com\\/watch',
-  'youtube\\.com\\/embed',
-  'youtubei\\/v1\\/player',
-  'youtubei\\/v1\\/next',
-  'youtube\\.com\\/youtubei',
   'youtube-nocookie\\.com',
   'youtu\\.be',
   // United Internet CDNs (GMX, Web.de) — serve site CSS/JS, not just ads
@@ -142,10 +144,23 @@ const WHITELIST_REGEX = new RegExp([
   // Cloudflare challenge/protection — MUST NOT be blocked
   'challenges\\.cloudflare\\.com',
   'cloudflareinsights\\.com',
-  '\\/cdn-cgi\\/',
-  'cloudflare\\.com\\/cdn-cgi',
   'turnstile\\.cloudflare\\.com',
   'cloudflare-dns\\.com',
+].join('|'), 'i');
+
+// Path-based whitelist — tested against the full URL
+const WHITELIST_PATH_REGEX = new RegExp([
+  'googleapis\\.com\\/css',
+  'googleapis\\.com\\/js',
+  'google\\.com\\/recaptcha',
+  'google\\.com\\/maps',
+  'youtube\\.com\\/watch',
+  'youtube\\.com\\/embed',
+  'youtubei\\/v1\\/player',
+  'youtubei\\/v1\\/next',
+  'youtube\\.com\\/youtubei',
+  '\\/cdn-cgi\\/',
+  'cloudflare\\.com\\/cdn-cgi',
 ].join('|'), 'i');
 
 /**
@@ -186,11 +201,14 @@ function shouldBlock(url) {
   // Skip data: and blob: URLs (can't block meaningfully)
   if (url.startsWith('data:') || url.startsWith('blob:')) return false;
 
-  // Whitelist check first (single regex)
-  if (WHITELIST_REGEX.test(url)) return false;
-
   // Fast domain Set lookup
   const hostname = extractHostname(url);
+
+  // Whitelist check — hostname patterns tested against hostname only,
+  // path patterns tested against full URL
+  if (hostname && WHITELIST_REGEX.test(hostname)) return false;
+  if (WHITELIST_PATH_REGEX.test(url)) return false;
+
   if (hostname && isDomainBlocked(hostname)) return true;
 
   // Path/pattern regex (single combined regex)
@@ -214,12 +232,14 @@ async function setupAdblocker(browserSession, onBlocked, chromeInfo) {
     }
   );
 
+  // NOTE: onBeforeRedirect is informational only in Electron — it fires AFTER
+  // the redirect has already been followed, so we cannot actually cancel it.
+  // We log for debugging but do NOT call onBlocked() to avoid inflating the counter.
   browserSession.webRequest.onBeforeRedirect(
     { urls: ['*://*/*'] },
     (details) => {
       if (details.redirectURL && shouldBlock(details.redirectURL)) {
-        onBlocked(1);
-        console.log('[Slime Adblocker] Blocked redirect to:', details.redirectURL.substring(0, 60));
+        console.log('[Slime Adblocker] Detected redirect to ad URL (cannot block):', details.redirectURL.substring(0, 60));
       }
     }
   );

@@ -18,7 +18,7 @@
   Object.defineProperty(navigator, 'vendorSub', { get: () => '', configurable: true });
 
   // 2. Firefox-specific properties
-  Object.defineProperty(navigator, 'buildID', { get: () => '20260301000000', configurable: true });
+  Object.defineProperty(navigator, 'buildID', { get: () => '20250301000000', configurable: true });
   Object.defineProperty(navigator, 'oscpu', { get: () => 'Windows NT 10.0; Win64; x64', configurable: true });
 
   // 3. Remove Chromium/Electron giveaways
@@ -35,6 +35,14 @@
   // navigator.connection — Chrome-only Network Information API
   try { delete navigator.connection; } catch(e) {}
   Object.defineProperty(navigator, 'connection', { get: () => undefined, configurable: true });
+
+  // navigator.deviceMemory — Chrome-only Device Memory API
+  try { delete navigator.deviceMemory; } catch(e) {}
+  Object.defineProperty(navigator, 'deviceMemory', { get: () => undefined, configurable: true });
+
+  // navigator.scheduling — Chrome-only Scheduling API
+  try { delete navigator.scheduling; } catch(e) {}
+  Object.defineProperty(navigator, 'scheduling', { get: () => undefined, configurable: true });
 
   // performance.memory — Chrome-only
   if (performance.memory) {

@@ -14,6 +14,9 @@ const fs = require('fs');
 // Active IMAP connections (reused across requests)
 const connections = new Map();
 const idleWatchers = new Map();
+let _decrypt = null;
+let _readJSON = null;
+let _getMainWindow = null;
 
 async function getOrConnect(accountId, decrypt, readJSON) {
   if (connections.has(accountId)) {
@@ -39,6 +42,15 @@ async function getOrConnect(accountId, decrypt, readJSON) {
 
   client.on('close', () => {
     connections.delete(accountId);
+    if (idleWatchers.has(accountId)) {
+      idleWatchers.delete(accountId);
+      // Attempt reconnection after a delay for accounts with active idle watchers
+      if (_decrypt && _readJSON && _getMainWindow) {
+        setTimeout(() => {
+          startIdleWatcher(accountId, _decrypt, _readJSON, _getMainWindow);
+        }, 10000);
+      }
+    }
   });
 
   client.on('error', (err) => {
@@ -50,6 +62,9 @@ async function getOrConnect(accountId, decrypt, readJSON) {
 }
 
 function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, getMainWindow) {
+  _decrypt = decrypt;
+  _readJSON = readJSON;
+  _getMainWindow = getMainWindow;
 
   // ==========================================
   // Account CRUD
@@ -57,7 +72,13 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
 
   ipcMain.handle('email-accounts-get', () => {
     const accounts = readJSON('email-accounts.json', []);
-    return accounts.map(a => ({ ...a, password: decrypt(a.password) }));
+    return accounts.map(a => {
+      try {
+        return { ...a, password: decrypt(a.password) };
+      } catch (e) {
+        return { ...a, password: '' };
+      }
+    });
   });
 
   ipcMain.handle('email-accounts-save', (_, account) => {
@@ -65,7 +86,7 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
     const accounts = readJSON('email-accounts.json', []);
     const encrypted = {
       ...account,
-      password: encrypt(account.password),
+      password: account.password ? encrypt(account.password) : encrypt(''),
     };
     if (!encrypted.id) encrypted.id = crypto.randomUUID();
 
@@ -140,9 +161,14 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
   // ==========================================
 
   ipcMain.handle('email-folders-get', async (_, accountId) => {
-    const client = await getOrConnect(accountId, decrypt, readJSON);
-    const list = await client.list();
-    return list.map(mb => ({ name: mb.name, path: mb.path, specialUse: mb.specialUse }));
+    try {
+      const client = await getOrConnect(accountId, decrypt, readJSON);
+      const list = await client.list();
+      return list.map(mb => ({ name: mb.name, path: mb.path, specialUse: mb.specialUse }));
+    } catch (e) {
+      console.error('email-folders-get error:', e.message);
+      return [];
+    }
   });
 
   // ==========================================
@@ -150,110 +176,130 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
   // ==========================================
 
   ipcMain.handle('email-messages-get', async (_, accountId, folder, page = 0) => {
-    const client = await getOrConnect(accountId, decrypt, readJSON);
-    const lock = await client.getMailboxLock(folder);
     try {
-      const messages = [];
-      const limit = 50;
+      const client = await getOrConnect(accountId, decrypt, readJSON);
+      const lock = await client.getMailboxLock(folder);
+      try {
+        const messages = [];
+        const limit = 50;
 
-      // Use SEARCH to get all UIDs, then sort by UID descending (newest first)
-      const allUids = await client.search({ all: true }, { uid: true });
-      if (!allUids || allUids.length === 0) return { messages: [], total: 0, hasMore: false };
+        // Use SEARCH to get all UIDs, then sort by UID descending (newest first)
+        const allUids = await client.search({ all: true }, { uid: true });
+        if (!allUids || allUids.length === 0) return { messages: [], total: 0, hasMore: false };
 
-      // Sort UIDs descending (highest UID = newest message)
-      allUids.sort((a, b) => b - a);
+        // Sort UIDs descending (highest UID = newest message)
+        allUids.sort((a, b) => b - a);
 
-      const total = allUids.length;
-      const pageUids = allUids.slice(page * limit, (page + 1) * limit);
-      if (pageUids.length === 0) return { messages: [], total, hasMore: false };
+        const total = allUids.length;
+        const pageUids = allUids.slice(page * limit, (page + 1) * limit);
+        if (pageUids.length === 0) return { messages: [], total, hasMore: false };
 
-      // Fetch envelopes for this page of UIDs
-      const uidRange = pageUids.join(',');
-      for await (const msg of client.fetch(uidRange, {
-        envelope: true,
-        flags: true,
-        uid: true,
-      }, { uid: true })) {
-        messages.push({
-          uid: msg.uid,
-          subject: msg.envelope.subject || '(No Subject)',
-          from: msg.envelope.from?.[0] || null,
-          date: msg.envelope.date,
-          flags: [...msg.flags],
-          seen: msg.flags.has('\\Seen'),
-        });
+        // Fetch envelopes for this page of UIDs
+        const uidRange = pageUids.join(',');
+        for await (const msg of client.fetch(uidRange, {
+          envelope: true,
+          flags: true,
+          uid: true,
+        }, { uid: true })) {
+          messages.push({
+            uid: msg.uid,
+            subject: msg.envelope.subject || '(No Subject)',
+            from: msg.envelope.from?.[0] || null,
+            date: msg.envelope.date,
+            flags: [...msg.flags],
+            seen: msg.flags.has('\\Seen'),
+          });
+        }
+
+        // Sort by date descending (most recent first)
+        messages.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        return { messages, total, hasMore: (page + 1) * limit < total };
+      } finally {
+        lock.release();
       }
-
-      // Sort by date descending (most recent first)
-      messages.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-      return { messages, total, hasMore: (page + 1) * limit < total };
-    } finally {
-      lock.release();
+    } catch (e) {
+      console.error('email-messages-get error:', e.message);
+      return { messages: [], total: 0, hasMore: false };
     }
   });
 
   ipcMain.handle('email-message-get', async (_, accountId, folder, uid) => {
-    const client = await getOrConnect(accountId, decrypt, readJSON);
-    const lock = await client.getMailboxLock(folder);
     try {
-      const downloaded = await client.download(uid.toString(), undefined, { uid: true });
-      const parsed = await simpleParser(downloaded.content);
+      const client = await getOrConnect(accountId, decrypt, readJSON);
+      const lock = await client.getMailboxLock(folder);
+      try {
+        const downloaded = await client.download(uid.toString(), undefined, { uid: true });
+        const parsed = await simpleParser(downloaded.content);
 
-      // Mark as read
-      await client.messageFlagsAdd(uid.toString(), ['\\Seen'], { uid: true });
+        // Mark as read
+        await client.messageFlagsAdd(uid.toString(), ['\\Seen'], { uid: true });
 
-      return {
-        uid,
-        subject: parsed.subject || '(No Subject)',
-        from: parsed.from?.text || '',
-        to: parsed.to?.text || '',
-        date: parsed.date,
-        html: parsed.html || null,
-        text: parsed.text || null,
-        attachments: (parsed.attachments || []).map((att, i) => ({
-          filename: att.filename || `attachment-${i}`,
-          contentType: att.contentType,
-          size: att.size || att.content?.length || 0,
-          index: i,
-        })),
-      };
-    } finally {
-      lock.release();
+        return {
+          uid,
+          subject: parsed.subject || '(No Subject)',
+          from: parsed.from?.text || '',
+          to: parsed.to?.text || '',
+          date: parsed.date,
+          html: parsed.html || null,
+          text: parsed.text || null,
+          attachments: (parsed.attachments || []).map((att, i) => ({
+            filename: att.filename || `attachment-${i}`,
+            contentType: att.contentType,
+            size: att.size || att.content?.length || 0,
+            index: i,
+          })),
+        };
+      } finally {
+        lock.release();
+      }
+    } catch (e) {
+      console.error('email-message-get error:', e.message);
+      return null;
     }
   });
 
   ipcMain.handle('email-attachment-download', async (_, accountId, folder, uid, index) => {
-    const client = await getOrConnect(accountId, decrypt, readJSON);
-    const lock = await client.getMailboxLock(folder);
     try {
-      const downloaded = await client.download(uid.toString(), undefined, { uid: true });
-      const parsed = await simpleParser(downloaded.content);
-      const attachments = parsed.attachments || [];
-      if (index < 0 || index >= attachments.length) {
-        throw new Error('Attachment index out of range');
+      const client = await getOrConnect(accountId, decrypt, readJSON);
+      const lock = await client.getMailboxLock(folder);
+      try {
+        const downloaded = await client.download(uid.toString(), undefined, { uid: true });
+        const parsed = await simpleParser(downloaded.content);
+        const attachments = parsed.attachments || [];
+        if (index < 0 || index >= attachments.length) {
+          throw new Error('Attachment index out of range');
+        }
+        const att = attachments[index];
+        const safeFilename = path.basename(att.filename || `attachment_${att.partId || index}`);
+        const downloadsDir = app.getPath('downloads');
+        const filePath = path.join(downloadsDir, safeFilename);
+        fs.writeFileSync(filePath, att.content);
+        shell.showItemInFolder(filePath);
+        return { success: true, filePath };
+      } finally {
+        lock.release();
       }
-      const att = attachments[index];
-      const filename = att.filename || `attachment-${index}`;
-      const downloadsDir = app.getPath('downloads');
-      const filePath = path.join(downloadsDir, filename);
-      fs.writeFileSync(filePath, att.content);
-      shell.showItemInFolder(filePath);
-      return { success: true, filePath };
-    } finally {
-      lock.release();
+    } catch (e) {
+      console.error('email-attachment-download error:', e.message);
+      return { success: false, error: e.message };
     }
   });
 
   ipcMain.handle('email-message-delete', async (_, accountId, folder, uid) => {
-    const client = await getOrConnect(accountId, decrypt, readJSON);
-    const lock = await client.getMailboxLock(folder);
     try {
-      await client.messageDelete(uid.toString(), { uid: true });
-    } finally {
-      lock.release();
+      const client = await getOrConnect(accountId, decrypt, readJSON);
+      const lock = await client.getMailboxLock(folder);
+      try {
+        await client.messageDelete(uid.toString(), { uid: true });
+      } finally {
+        lock.release();
+      }
+      return true;
+    } catch (e) {
+      console.error('email-message-delete error:', e.message);
+      return { success: false, error: e.message };
     }
-    return true;
   });
 
   // ==========================================
@@ -261,30 +307,35 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
   // ==========================================
 
   ipcMain.handle('email-send', async (_, accountId, mail) => {
-    const accounts = readJSON('email-accounts.json', []);
-    const account = accounts.find(a => a.id === accountId);
-    if (!account) return { success: false, error: 'Account not found' };
-
-    const transport = nodemailer.createTransport({
-      host: account.smtp.host,
-      port: account.smtp.port,
-      secure: account.smtp.port === 465,
-      auth: { user: account.username, pass: decrypt(account.password) },
-    });
-
     try {
-      await transport.sendMail({
-        from: account.email,
-        to: mail.to,
-        subject: mail.subject,
-        text: mail.text || mail.body || '',
-        html: mail.html || undefined,
+      const accounts = readJSON('email-accounts.json', []);
+      const account = accounts.find(a => a.id === accountId);
+      if (!account) return { success: false, error: 'Account not found' };
+
+      const transport = nodemailer.createTransport({
+        host: account.smtp.host,
+        port: account.smtp.port,
+        secure: account.smtp.port === 465,
+        auth: { user: account.username, pass: decrypt(account.password) },
       });
-      return { success: true };
+
+      try {
+        await transport.sendMail({
+          from: account.email,
+          to: mail.to,
+          subject: mail.subject,
+          text: mail.text || mail.body || '',
+          html: mail.html || undefined,
+        });
+        return { success: true };
+      } catch (e) {
+        return { success: false, error: e.message };
+      } finally {
+        transport.close();
+      }
     } catch (e) {
+      console.error('email-send error:', e.message);
       return { success: false, error: e.message };
-    } finally {
-      transport.close();
     }
   });
 
@@ -292,7 +343,8 @@ function setupEmail(ipcMain, encrypt, decrypt, readJSON, writeJSON, dataPath, ge
   // Push Notifications (IMAP IDLE)
   // ==========================================
 
-  ipcMain.handle('email-notifications-set', async (_, accountId, enabled) => {
+  ipcMain.handle('email-notifications-set', async (_, accountId, data) => {
+    const enabled = !!data.enabled; // coerce to boolean
     const accounts = readJSON('email-accounts.json', []);
     const idx = accounts.findIndex(a => a.id === accountId);
     if (idx >= 0) {
@@ -326,7 +378,7 @@ async function startIdleWatcher(accountId, decrypt, readJSON, getMainWindow) {
     const lock = await client.getMailboxLock('INBOX');
 
     client.on('exists', (data) => {
-      const win = getMainWindow();
+      const win = getMainWindow ? getMainWindow() : null;
       if (win && !win.isDestroyed()) {
         win.webContents.send('email-new-message', { accountId });
       }
@@ -337,7 +389,7 @@ async function startIdleWatcher(accountId, decrypt, readJSON, getMainWindow) {
       });
       notif.show();
       notif.on('click', () => {
-        const w = getMainWindow();
+        const w = getMainWindow ? getMainWindow() : null;
         if (w) { w.show(); w.focus(); }
       });
     });
